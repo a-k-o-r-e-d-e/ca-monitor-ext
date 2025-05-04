@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Telegram CA Monitor",
+  "version": "1.0",
+  "description": "Monitors Telegram Web for CAs and forwards to Trojan bot.",
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": ["https://web.telegram.org/*"],
+  "background": {
+    "service_worker": "src/scripts/background.ts"
+  },
+  "action": {
+    "default_popup": "index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.telegram.org/*"],
+      "js": ["src/scripts/contentScript.ts"]
+    }
+  ]
+}

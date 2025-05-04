@@ -1,3 +1,5 @@
+import { formatDistanceToNow } from "date-fns";
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
 });
@@ -21,6 +23,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function processForwardedCA(ca: string, chatTitle: string, timestamp: string) {
   console.log("[Background] Processing forwarded CA:", ca);
+  
 
   // ⏱️ Ignore messages older than 10 minutes
   const timestampSeconds = parseInt(timestamp, 10);
@@ -30,8 +33,9 @@ async function processForwardedCA(ca: string, chatTitle: string, timestamp: stri
   const maxAge = 1800; // 1800 seconds = 30 minutes
 
   if (ageInSeconds > maxAge) {
-    console.log("[Message too old]", ca);
-    return; // 600 seconds = 10 minutes
+    const duration = formatDistanceToNow(timestampSeconds * 1000, { addSuffix: true });
+    console.log(`[CA Message too old]. CA: ${ca} --- Age: ${duration}`,);
+    return;
   }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -108,7 +112,7 @@ async function sendToForwardTarget(ca: string, senderChatTitle: string) {
   input.dispatchEvent(pasteEvent);
 
     const sendButton = document.querySelector(".btn-send"); // adjust selector
-    console.log("Send Button:", sendButton);
+    // console.log("Send Button:", sendButton);
     if (sendButton instanceof HTMLElement) {
       sendButton.click();
     }

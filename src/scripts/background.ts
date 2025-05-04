@@ -176,7 +176,7 @@ async function sendToForwardTarget(
   ) as HTMLElement;
   if (!input) return;
 
-  const messageText = ticker ? `${ticker} → ${ca}` : ca;
+  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`
 
   input.focus();
   const pasteEvent = new ClipboardEvent("paste", {

@@ -26,8 +26,9 @@ chrome.runtime.onStartup.addListener(loadQueueFromStorage);
 chrome.runtime.onInstalled.addListener(loadQueueFromStorage);
 
 // Persist after any modification
-function saveQueueToStorage() {
-  chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: forwardQueue });
+async function saveQueueToStorage() {
+  await chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: forwardQueue });
+  console.log("[Storage] Saved queue to storage:", forwardQueue);
 }
 
 function loadQueueFromStorage() {
@@ -49,63 +50,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function processQueue() {
-  if (isProcessingQueue) return;
+  console.log("Is Processing Queue:", isProcessingQueue);
+  if (isProcessingQueue) {
+    console.log("[Queue] Already processing, skipping...");
+    return;
+  }
+
   isProcessingQueue = true;
+
+  console.log("[Queue] Processing started... ");
 
   while (forwardQueue.length > 0) {
     const request = forwardQueue[0]; // Peek
-    const { ca, chatTitle, timestamp, ticker } = request;
+    console.log("[Queue] Processing request:", request);
 
-    // ⏱️ Ignore messages older than 10 minutes
-    const timestampSeconds = parseInt(timestamp, 10);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const ageInSeconds = nowSeconds - timestampSeconds;
-
-    const maxAge = 1800; // 1800 seconds = 30 minutes
-
-    if (ageInSeconds > maxAge) {
-      const duration = formatDistanceToNow(timestampSeconds * 1000, {
-        addSuffix: true,
-      });
-      const datetime = formatISO(timestampSeconds * 1000);
-
-      console.log(
-        `[CA Message too old]. Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
-      );
-      return;
-    } else {
-      try {
-        const tabs = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        });
-        const activeTab = tabs[0];
-        if (activeTab?.id) {
-          await chrome.scripting.executeScript({
-            target: { tabId: activeTab.id },
-            func: sendToForwardTarget,
-            args: [ca, ticker, chatTitle],
-          });
-        }
-      } catch (err) {
-        console.error("[Queue] Error forwarding CA:", err);
-      }
+    try {
+      await processForwardedCA(request);
+    } finally {
+      // Always remove the item from the queue after processing
+      // regardless of success or failure
+      console.log("[Queue] Request processed, removing from queue...");
+      forwardQueue.shift(); // Remove after processing
+      saveQueueToStorage(); // Save updated queue
+      // // ✅ Process the next item in queue
+      // processQueue();
     }
-
-    forwardQueue.shift(); // Remove after processing
-    saveQueueToStorage(); // Save updated queue
-    await new Promise((res) => setTimeout(res, 2000));
   }
 
   isProcessingQueue = false;
 }
 
-async function processForwardedCA(
-  ca: string,
-  ticker: string,
-  chatTitle: string,
-  timestamp: string
-) {
+async function processForwardedCA(caMsg: ForwardRequest) {
+  const { ca, ticker, chatTitle, timestamp } = caMsg;
   console.log("[Background] Processing forwarded CA:", ca, "ticker:", ticker);
 
   // ⏱️ Ignore messages older than 10 minutes
@@ -127,16 +103,20 @@ async function processForwardedCA(
     return;
   }
 
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const activeTab = tabs[0];
-    if (activeTab?.id) {
-      chrome.scripting.executeScript({
-        target: { tabId: activeTab.id },
-        func: sendToForwardTarget,
-        args: [ca, ticker, chatTitle],
-      });
-    }
+  const tabs = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
   });
+  const activeTab = tabs[0];
+  if (activeTab?.id) {
+    await chrome.scripting.executeScript({
+      target: { tabId: activeTab.id },
+      func: sendToForwardTarget,
+      args: [ca, ticker, chatTitle],
+    });
+
+    console.log("[Queue] CA forwarding Done.");
+  }
 }
 
 async function sendToForwardTarget(
@@ -144,6 +124,7 @@ async function sendToForwardTarget(
   ticker: string,
   senderChatTitle: string
 ) {
+  console.log("[Send to Forward Target] Called...");
   function getCurrentChatTitle(): string | null {
     const titleEl = document.querySelector(
       '[class*="chat-info"] [class*="title"]'

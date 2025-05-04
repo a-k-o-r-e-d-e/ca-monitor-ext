@@ -18,7 +18,6 @@ let runtimeSettings: RuntimeSettings | null = {
 };
 
 const seenMessageIds = new Set<string>();
-
 let forwardInProgress = false;
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -92,7 +91,6 @@ function extractMessageData(el: Element): MessageData | null {
   if (!mid || !timestamp || !textEl) return null;
 
   const text = textEl.textContent?.trim() || "";
-
   return { mid, timestamp, text, chatTitle };
 }
 
@@ -104,10 +102,7 @@ async function processMessageBubble(el: Element) {
     return;
   }
   const data = extractMessageData(el);
-  if (
-    !data
-    || seenMessageIds.has(data.mid)
-  ) {
+  if (!data || seenMessageIds.has(data.mid)) {
     console.log("[Message already seen or invalid data]", data);
     return;
   }
@@ -116,7 +111,6 @@ async function processMessageBubble(el: Element) {
   const timestampSeconds = parseInt(data.timestamp, 10);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const ageInSeconds = nowSeconds - timestampSeconds;
-
   const maxAge = (await loadSettings()).maxMessageAge;
 
   // if (ageInSeconds > maxAge) {
@@ -126,31 +120,47 @@ async function processMessageBubble(el: Element) {
 
   seenMessageIds.add(data.mid);
   console.log("[New Message]", data);
-
-  // chrome.runtime.sendMessage({ type: "NEW_TELEGRAM_MESSAGE", data });
   processMessageData(data);
 }
 
-async function scanUnreadMessages() {
+function scrollChatContainerBy(pixels: number) {
+  console.log
+  const container = document.querySelector(".bubbles-group");
+  if (container) container.scrollBy(0, pixels);
+}
+
+async function scanUnreadMessagesInChunks(maxBatches = 10) {
   const isChatWatched = await isWatchedChat();
   if (!isChatWatched) {
     console.log("[Scan Unread messages] Not in watched chat, skipping...");
     return;
   }
-  const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
-  if (!firstUnreadEl) return;
 
-  const groupContainer = firstUnreadEl.parentElement?.parentElement; // likely .bubbles-group
-  if (!groupContainer) return;
+  const container = document.querySelector(".bubbles-group");
+  if (!container) return;
 
-  const bubbles = Array.from(groupContainer.querySelectorAll(".bubble"));
-  const index = bubbles.indexOf(firstUnreadEl as Element);
+  for (let i = 0; i < maxBatches; i++) {
+    const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
+    if (!firstUnreadEl) {
+      console.log("[Scan Chunk] No unread marker found.");
+      break;
+    }
 
-  if (index === -1) return;
+    firstUnreadEl.scrollIntoView({ behavior: "auto", block: "center" });
+    await new Promise((res) => setTimeout(res, 300));
 
-  const unreadBubbles = bubbles.slice(index); // from first unread onward
+    const allBubbles = Array.from(container.querySelectorAll(".bubble"));
+    const index = allBubbles.indexOf(firstUnreadEl as Element);
+    if (index === -1) break;
 
-  unreadBubbles.forEach((bubble) => processMessageBubble(bubble));
+    const unreadBubbles = allBubbles.slice(index, index + 10);
+    for (const bubble of unreadBubbles) {
+      await processMessageBubble(bubble);
+    }
+
+    scrollChatContainerBy(300);
+    await new Promise((res) => setTimeout(res, 1000));
+  }
 }
 
 function observeNewMessages() {
@@ -159,7 +169,7 @@ function observeNewMessages() {
 
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      mutation.addedNodes.forEach( async (node) => {
+      mutation.addedNodes.forEach(async (node) => {
         if (node instanceof HTMLElement && node.classList.contains("bubble")) {
           const isChatWatched = await isWatchedChat();
           if (!isChatWatched) {
@@ -181,7 +191,7 @@ function observeNewMessages() {
 async function pollRecentMessages() {
   const isChatWatched = await isWatchedChat();
   if (!isChatWatched) {
-    console.log("[Poll Recent Messages]Not in watched chat, skipping...");
+    console.log("[Poll Recent Messages] Not in watched chat, skipping...");
     return;
   }
   const bubbles = Array.from(document.querySelectorAll(".bubble"));
@@ -189,7 +199,7 @@ async function pollRecentMessages() {
 }
 
 async function initTelegramMessageMonitor() {
-  scanUnreadMessages();
+  scanUnreadMessagesInChunks();
   observeNewMessages();
 }
 
@@ -199,13 +209,14 @@ async function startIfWatchedChat() {
 
   const isChatWatched = await isWatchedChat();
   if (!isChatWatched) {
-    console.log(
-      "[startIfWatchedChat] Chat is in watched list, starting monitor..."
-    );
-    initTelegramMessageMonitor();
-  } else {
-    console.log("[Monitor] Chat not watched, skipping...");
+    console.log("[startIfWatchedChat] Chat not watched, skipping...");
+    return;
   }
+
+  console.log(
+    "[startIfWatchedChat] Chat is in watched list, starting monitor..."
+  );
+  initTelegramMessageMonitor();
 
   setInterval(async () => {
     console.log("[Monitor] Forward in progress:", forwardInProgress);
@@ -222,40 +233,24 @@ async function startIfWatchedChat() {
     }
 
     pollRecentMessages();
-  }, 25000); // every 5 seconds
+  }, 25000);
 }
 
 const waitForChatLoad = setInterval(() => {
   console.log("[Monitor] Waiting for chat to load...");
   if (document.querySelector(".bubbles-group")) {
     clearInterval(waitForChatLoad);
-    console.log("[Monitor] Chat loaded, CLearing interval...");
+    console.log("[Monitor] Chat loaded, Clearing interval...");
     startIfWatchedChat();
   } else {
     console.log("[Monitor] Chat not loaded yet, retrying...");
   }
 }, 500);
 
-// const processMessageData = (msg: MessageData) => {
-//   console.log("[Monitor] Process Message:", msg);
-
-//   // Example: Check for crypto address
-//   const CA_REGEX = /0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-//   const matches = msg.text.match(CA_REGEX);
-//   console.log("Matches Len:", matches?.length);
-//   console.log("Matches:", matches);
-//   if (matches) {
-//     sendToForwardTarget(matches[0]);
-//     //// matches.forEach(sendToForwardTarget);
-//   }
-// };
-
 function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
-
   const CA_REGEX = /0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/g;
   const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
-
 
   const caMatches = msg.text.match(CA_REGEX);
   const tickerMatches = msg.text.match(TICKER_REGEX);
@@ -267,13 +262,13 @@ function processMessageData(msg: MessageData) {
     console.log(
       `[Monitor] Forwarding: CA = ${firstCA}, Ticker = ${firstTicker}`
     );
-    
+
     chrome.runtime.sendMessage({
       type: "FORWARD_CA",
       data: {
         ca: firstCA,
         ticker: firstTicker,
-        chatTitle: msg.chatTitle, // Replace with dynamic logic if needed
+        chatTitle: msg.chatTitle,
         timestamp: msg.timestamp,
       },
     });

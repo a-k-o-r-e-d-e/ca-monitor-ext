@@ -1,4 +1,4 @@
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, formatISO } from "date-fns";
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
@@ -15,14 +15,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[Background] Message received:", message);
   if (message.type === "FORWARD_CA") {
     console.log("[Background] Forward CA Message received:");
-    const { ca, chatTitle, timestamp } = message.data;
+    const { ca, ticker, chatTitle, timestamp } = message.data;
 
-    processForwardedCA(ca, chatTitle, timestamp)
+    processForwardedCA(ca, ticker, chatTitle, timestamp)
   }
 });
 
-async function processForwardedCA(ca: string, chatTitle: string, timestamp: string) {
-  console.log("[Background] Processing forwarded CA:", ca);
+async function processForwardedCA(ca: string, ticker: string,  chatTitle: string, timestamp: string) {
+  console.log("[Background] Processing forwarded CA:", ca, "ticker:", ticker);
   
 
   // ⏱️ Ignore messages older than 10 minutes
@@ -34,7 +34,11 @@ async function processForwardedCA(ca: string, chatTitle: string, timestamp: stri
 
   if (ageInSeconds > maxAge) {
     const duration = formatDistanceToNow(timestampSeconds * 1000, { addSuffix: true });
-    console.log(`[CA Message too old]. CA: ${ca} --- Age: ${duration}`,);
+    const datetime = formatISO(timestampSeconds * 1000);
+    
+    console.log(
+      `[CA Message too old]. Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
+    );
     return;
   }
 
@@ -44,13 +48,13 @@ async function processForwardedCA(ca: string, chatTitle: string, timestamp: stri
       chrome.scripting.executeScript({
         target: { tabId: activeTab.id },
         func: sendToForwardTarget,
-        args: [ca, chatTitle],
+        args: [ca, ticker, chatTitle],
       });
     }
   });
 }
 
-async function sendToForwardTarget(ca: string, senderChatTitle: string) {
+async function sendToForwardTarget(ca: string, ticker: string, senderChatTitle: string) {
   function getCurrentChatTitle(): string | null {
     const titleEl = document.querySelector(
       '[class*="chat-info"] [class*="title"]'
@@ -102,13 +106,15 @@ async function sendToForwardTarget(ca: string, senderChatTitle: string) {
   ) as HTMLElement;
   if (!input) return;
 
+  const messageText = ticker ? `${ticker} → ${ca}` : ca;
+
   input.focus();
   const pasteEvent = new ClipboardEvent("paste", {
     bubbles: true,
     cancelable: true,
     clipboardData: new DataTransfer(),
   });
-  pasteEvent.clipboardData?.setData("text/plain", ca);
+  pasteEvent.clipboardData?.setData("text/plain", messageText);
   input.dispatchEvent(pasteEvent);
 
     const sendButton = document.querySelector(".btn-send"); // adjust selector

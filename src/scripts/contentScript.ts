@@ -106,7 +106,7 @@ async function processMessageBubble(el: Element) {
   const data = extractMessageData(el);
   if (
     !data
-    // || seenMessageIds.has(data.mid)
+    || seenMessageIds.has(data.mid)
   ) {
     console.log("[Message already seen or invalid data]", data);
     return;
@@ -254,14 +254,25 @@ function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
 
   const CA_REGEX = /0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-  const matches = msg.text.match(CA_REGEX);
+  const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
 
-  if (matches) {
-    console.log("[Monitor] Forwarding first match to forwarder:", matches[0]);
+
+  const caMatches = msg.text.match(CA_REGEX);
+  const tickerMatches = msg.text.match(TICKER_REGEX);
+
+  if (caMatches) {
+    const firstCA = caMatches[0];
+    const firstTicker = tickerMatches?.[0] || "";
+
+    console.log(
+      `[Monitor] Forwarding: CA = ${firstCA}, Ticker = ${firstTicker}`
+    );
+    
     chrome.runtime.sendMessage({
       type: "FORWARD_CA",
       data: {
-        ca: matches[0],
+        ca: firstCA,
+        ticker: firstTicker,
         chatTitle: msg.chatTitle, // Replace with dynamic logic if needed
         timestamp: msg.timestamp,
       },

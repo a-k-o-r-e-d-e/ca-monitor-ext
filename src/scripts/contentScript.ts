@@ -124,12 +124,12 @@ async function processMessageBubble(el: Element) {
 }
 
 function scrollChatContainerBy(pixels: number) {
-  console.log
+  console.log("[Scroll Chat Container] Scrolling by", pixels, "pixels");
   const container = document.querySelector(".bubbles-group");
   if (container) container.scrollBy(0, pixels);
 }
 
-async function scanUnreadMessagesInChunks(maxBatches = 10) {
+async function scanUnreadMessages() {
   const isChatWatched = await isWatchedChat();
   if (!isChatWatched) {
     console.log("[Scan Unread messages] Not in watched chat, skipping...");
@@ -139,29 +139,48 @@ async function scanUnreadMessagesInChunks(maxBatches = 10) {
   const container = document.querySelector(".bubbles-group");
   if (!container) return;
 
-  for (let i = 0; i < maxBatches; i++) {
+  let prevBubbleCount = 0;
+
+  // Progressive scroll until no new bubbles are loaded
+  while (true) {
     const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
     if (!firstUnreadEl) {
-      console.log("[Scan Chunk] No unread marker found.");
+      console.log("[Scan] No unread marker found. Exiting scan.");
       break;
     }
 
     firstUnreadEl.scrollIntoView({ behavior: "auto", block: "center" });
     await new Promise((res) => setTimeout(res, 300));
 
-    const allBubbles = Array.from(container.querySelectorAll(".bubble"));
-    const index = allBubbles.indexOf(firstUnreadEl as Element);
-    if (index === -1) break;
+    const bubbles = Array.from(document.querySelectorAll(".bubble"));
+    console.log("[Scan] Found bubbles:", bubbles.length);
+    const firstUnreadIndex = bubbles.indexOf(firstUnreadEl as Element);
 
-    const unreadBubbles = allBubbles.slice(index, index + 10);
+    if (firstUnreadIndex === -1) {
+      console.log("[Scan] Index of unread marker not found. Exiting scan.");
+      return;
+    }
+
+    const unreadBubbles = bubbles.slice(firstUnreadIndex);
+
+    // Process newly revealed bubbles
     for (const bubble of unreadBubbles) {
       await processMessageBubble(bubble);
     }
 
-    scrollChatContainerBy(300);
-    await new Promise((res) => setTimeout(res, 1000));
+    if (unreadBubbles.length === prevBubbleCount) {
+      console.log("[Scan] No more new unread messages revealed, stopping.");
+      break;
+    }
+
+    prevBubbleCount = unreadBubbles.length;
+
+    // Scroll just slightly past the last visible bubble
+    unreadBubbles.at(-1)?.scrollIntoView({ behavior: "auto", block: "end" });
+    await new Promise((res) => setTimeout(res, 800));
   }
 }
+
 
 function observeNewMessages() {
   const container = document.querySelector(".bubbles-group");
@@ -199,7 +218,7 @@ async function pollRecentMessages() {
 }
 
 async function initTelegramMessageMonitor() {
-  scanUnreadMessagesInChunks();
+  scanUnreadMessages();
   observeNewMessages();
 }
 

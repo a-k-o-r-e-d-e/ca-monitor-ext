@@ -193,6 +193,8 @@ async function sendToForwardTarget(
     sendButton.click();
   }
 
+  await new Promise((res) => setTimeout(res, 1000));
+
   console.log("CA sent successfully to target chat.");
 
   console.log(

@@ -8,22 +8,105 @@ chrome.runtime.onStartup.addListener(() => {
   console.log("Telegram CA Monitor started");
 });
 
-
 // background.ts
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("[Background] Message received:", message);
-  if (message.type === "FORWARD_CA") {
-    console.log("[Background] Forward CA Message received:");
-    const { ca, ticker, chatTitle, timestamp } = message.data;
+interface ForwardRequest {
+  ca: string;
+  chatTitle: string;
+  timestamp: string;
+  ticker: string;
+}
 
-    processForwardedCA(ca, ticker, chatTitle, timestamp)
+const QUEUE_STORAGE_KEY = "forwardQueue";
+let forwardQueue: ForwardRequest[] = [];
+let isProcessingQueue = false;
+
+// Load from storage when extension starts
+chrome.runtime.onStartup.addListener(loadQueueFromStorage);
+chrome.runtime.onInstalled.addListener(loadQueueFromStorage);
+
+// Persist after any modification
+function saveQueueToStorage() {
+  chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: forwardQueue });
+}
+
+function loadQueueFromStorage() {
+  chrome.storage.local.get(QUEUE_STORAGE_KEY, (result) => {
+    forwardQueue = result[QUEUE_STORAGE_KEY] || [];
+    console.log("[Storage] Loaded queue from storage:", forwardQueue);
+    if (forwardQueue.length > 0) processQueue(); // resume if any pending
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log("[Background] Message received:", message.type);
+  if (message.type === "FORWARD_CA") {
+    forwardQueue.push(message.data);
+    saveQueueToStorage(); // Save after push
+    console.log("[Queue] Added to queue:", message.data);
+    processQueue(); // kick off processing if not already running
   }
 });
 
-async function processForwardedCA(ca: string, ticker: string,  chatTitle: string, timestamp: string) {
+async function processQueue() {
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
+
+  while (forwardQueue.length > 0) {
+    const request = forwardQueue[0]; // Peek
+    const { ca, chatTitle, timestamp, ticker } = request;
+
+    // ⏱️ Ignore messages older than 10 minutes
+    const timestampSeconds = parseInt(timestamp, 10);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const ageInSeconds = nowSeconds - timestampSeconds;
+
+    const maxAge = 1800; // 1800 seconds = 30 minutes
+
+    if (ageInSeconds > maxAge) {
+      const duration = formatDistanceToNow(timestampSeconds * 1000, {
+        addSuffix: true,
+      });
+      const datetime = formatISO(timestampSeconds * 1000);
+
+      console.log(
+        `[CA Message too old]. Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
+      );
+      return;
+    } else {
+      try {
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        const activeTab = tabs[0];
+        if (activeTab?.id) {
+          await chrome.scripting.executeScript({
+            target: { tabId: activeTab.id },
+            func: sendToForwardTarget,
+            args: [ca, ticker, chatTitle],
+          });
+        }
+      } catch (err) {
+        console.error("[Queue] Error forwarding CA:", err);
+      }
+    }
+
+    forwardQueue.shift(); // Remove after processing
+    saveQueueToStorage(); // Save updated queue
+    await new Promise((res) => setTimeout(res, 2000));
+  }
+
+  isProcessingQueue = false;
+}
+
+async function processForwardedCA(
+  ca: string,
+  ticker: string,
+  chatTitle: string,
+  timestamp: string
+) {
   console.log("[Background] Processing forwarded CA:", ca, "ticker:", ticker);
-  
 
   // ⏱️ Ignore messages older than 10 minutes
   const timestampSeconds = parseInt(timestamp, 10);
@@ -33,9 +116,11 @@ async function processForwardedCA(ca: string, ticker: string,  chatTitle: string
   const maxAge = 1800; // 1800 seconds = 30 minutes
 
   if (ageInSeconds > maxAge) {
-    const duration = formatDistanceToNow(timestampSeconds * 1000, { addSuffix: true });
+    const duration = formatDistanceToNow(timestampSeconds * 1000, {
+      addSuffix: true,
+    });
     const datetime = formatISO(timestampSeconds * 1000);
-    
+
     console.log(
       `[CA Message too old]. Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
     );
@@ -54,7 +139,11 @@ async function processForwardedCA(ca: string, ticker: string,  chatTitle: string
   });
 }
 
-async function sendToForwardTarget(ca: string, ticker: string, senderChatTitle: string) {
+async function sendToForwardTarget(
+  ca: string,
+  ticker: string,
+  senderChatTitle: string
+) {
   function getCurrentChatTitle(): string | null {
     const titleEl = document.querySelector(
       '[class*="chat-info"] [class*="title"]'
@@ -117,15 +206,18 @@ async function sendToForwardTarget(ca: string, ticker: string, senderChatTitle: 
   pasteEvent.clipboardData?.setData("text/plain", messageText);
   input.dispatchEvent(pasteEvent);
 
-    const sendButton = document.querySelector(".btn-send"); // adjust selector
-    // console.log("Send Button:", sendButton);
-    if (sendButton instanceof HTMLElement) {
-      sendButton.click();
-    }
+  const sendButton = document.querySelector(".btn-send"); // adjust selector
+  // console.log("Send Button:", sendButton);
+  if (sendButton instanceof HTMLElement) {
+    sendButton.click();
+  }
 
-    console.log("CA sent successfully to target chat.");
+  console.log("CA sent successfully to target chat.");
 
-    console.log("[xxxx] Attempting to navigate back to original chat...", originalChatTitle);
+  console.log(
+    "[xxxx] Attempting to navigate back to original chat...",
+    originalChatTitle
+  );
 
   // Step 3: Navigate back to original chat
   if (originalChatTitle) {
@@ -140,7 +232,10 @@ async function sendToForwardTarget(ca: string, ticker: string, senderChatTitle: 
     }
 
     if (originalChat) {
-      console.log("Simulating click to navigate back to original chat: ", originalChat);
+      console.log(
+        "Simulating click to navigate back to original chat: ",
+        originalChat
+      );
       originalChat.scrollIntoView({ behavior: "auto", block: "center" });
       originalChat.dispatchEvent(
         new MouseEvent("mousedown", { bubbles: true })

@@ -8,8 +8,6 @@ chrome.runtime.onStartup.addListener(() => {
   console.log("Telegram CA Monitor started");
 });
 
-// background.ts
-
 interface ForwardRequest {
   ca: string;
   chatTitle: string;
@@ -17,15 +15,33 @@ interface ForwardRequest {
   ticker: string;
 }
 
+interface ProcessedCAEntry {
+  ticker: string;
+  firstSeen: string;
+}
+type ProcessedCAsMap = Record<string, ProcessedCAEntry>;
+
 const QUEUE_STORAGE_KEY = "forwardQueue";
+const PROCESSED_CAS_KEY = "processedCAs";
+
+const MAX_PROCESSED_AGE = 3 * 24 * 60 * 60; // 3 days in seconds
+
 let forwardQueue: ForwardRequest[] = [];
+let processedCAsCache: ProcessedCAsMap = {};
 let isProcessingQueue = false;
 
-// Load from storage when extension starts
-chrome.runtime.onStartup.addListener(loadQueueFromStorage);
-chrome.runtime.onInstalled.addListener(loadQueueFromStorage);
+chrome.runtime.onStartup.addListener(() => {
+  loadQueueFromStorage();
+  loadProcessedCAsFromStorage().then(() => {
+    pruneOldProcessedCAs();
+  });
+});
 
-// Persist after any modification
+chrome.runtime.onInstalled.addListener(() => {
+  loadQueueFromStorage();
+  loadProcessedCAsFromStorage();
+});
+
 async function saveQueueToStorage() {
   await chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: forwardQueue });
   console.log("[Storage] Saved queue to storage:", forwardQueue);
@@ -39,9 +55,53 @@ function loadQueueFromStorage() {
   });
 }
 
+async function loadProcessedCAsFromStorage() {
+  const result = await chrome.storage.local.get(PROCESSED_CAS_KEY);
+  processedCAsCache = result[PROCESSED_CAS_KEY] || {};
+  console.log("[Storage] Loaded processed CAs:", processedCAsCache);
+}
+
+async function saveProcessedCAs(): Promise<void> {
+  await chrome.storage.local.set({ [PROCESSED_CAS_KEY]: processedCAsCache });
+  console.log("[Storage] Saved processed CAs to storage:", processedCAsCache);
+}
+
+async function markCaAsProcessed(ca: string, ticker: string): Promise<void> {
+  processedCAsCache[ca] = {
+    ticker,
+    firstSeen: new Date().toISOString(),
+  };
+
+  await saveProcessedCAs();
+}
+
+async function pruneOldProcessedCAs(): Promise<void> {
+  const cas = processedCAsCache;
+  const now = Math.floor(Date.now() / 1000);
+  for (const [ca, entry] of Object.entries(cas)) {
+    const timestampMs = Date.parse(entry.firstSeen);
+    if (now - timestampMs > MAX_PROCESSED_AGE * 1000) {
+      delete cas[ca];
+    }
+  }
+  await saveProcessedCAs();
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[Background] Message received:", message.type);
   if (message.type === "FORWARD_CA") {
+    const { ca, ticker, chatTitle, timestamp } = message.data;
+
+    if (processedCAsCache[ca]) {
+      console.log(`[Background] CA already processed: ${ca}`);
+      return;
+    }
+
+    // Mark CA as processed
+    markCaAsProcessed(ca, ticker).catch((error) => {
+      console.error("[Background] Error marking CA as processed:", error);
+    });
+
     forwardQueue.push(message.data);
     saveQueueToStorage(); // Save after push
     console.log("[Queue] Added to queue:", message.data);
@@ -57,11 +117,10 @@ async function processQueue() {
   }
 
   isProcessingQueue = true;
-
   console.log("[Queue] Processing started... ");
 
   while (forwardQueue.length > 0) {
-    const request = forwardQueue[0]; // Peek
+    const request = forwardQueue[0];
     console.log("[Queue] Processing request:", request);
 
     try {
@@ -72,8 +131,6 @@ async function processQueue() {
       console.log("[Queue] Request processed, removing from queue...");
       forwardQueue.shift(); // Remove after processing
       saveQueueToStorage(); // Save updated queue
-      // // ✅ Process the next item in queue
-      // processQueue();
     }
   }
 
@@ -103,10 +160,7 @@ async function processForwardedCA(caMsg: ForwardRequest) {
     return;
   }
 
-  const tabs = await chrome.tabs.query({
-    active: true,
-    currentWindow: true,
-  });
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const activeTab = tabs[0];
   if (activeTab?.id) {
     await chrome.scripting.executeScript({
@@ -114,7 +168,6 @@ async function processForwardedCA(caMsg: ForwardRequest) {
       func: sendToForwardTarget,
       args: [ca, ticker, chatTitle],
     });
-
     console.log("[Queue] CA forwarding Done.");
   }
 }
@@ -176,7 +229,7 @@ async function sendToForwardTarget(
   ) as HTMLElement;
   if (!input) return;
 
-  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`
+  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
 
   input.focus();
   const pasteEvent = new ClipboardEvent("paste", {
@@ -187,14 +240,12 @@ async function sendToForwardTarget(
   pasteEvent.clipboardData?.setData("text/plain", messageText);
   input.dispatchEvent(pasteEvent);
 
-  const sendButton = document.querySelector(".btn-send"); // adjust selector
-  // console.log("Send Button:", sendButton);
+  const sendButton = document.querySelector(".btn-send");
   if (sendButton instanceof HTMLElement) {
     sendButton.click();
   }
 
   await new Promise((res) => setTimeout(res, 1000));
-
   console.log("CA sent successfully to target chat.");
 
   console.log(
@@ -214,18 +265,14 @@ async function sendToForwardTarget(
       return;
     }
 
-    if (originalChat) {
-      console.log(
-        "Simulating click to navigate back to original chat: ",
-        originalChat
-      );
-      originalChat.scrollIntoView({ behavior: "auto", block: "center" });
-      originalChat.dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true })
-      );
-      originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    console.log(
+      "Simulating click to navigate back to original chat: ",
+      originalChatTitle
+    );
+    originalChat.scrollIntoView({ behavior: "auto", block: "center" });
+    originalChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      await waitForTargetChatLoad(originalChatTitle);
-    }
+    await waitForTargetChatLoad(originalChatTitle);
   }
 }

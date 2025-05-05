@@ -85,7 +85,7 @@ async function pruneOldProcessedCAs(): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   for (const [ca, entry] of Object.entries(cas)) {
     const timestampMs = Date.parse(entry.firstSeen);
-    if (now - timestampMs > MAX_PROCESSED_AGE * 1000) {
+    if (now - Math.floor(timestampMs / 1000) > MAX_PROCESSED_AGE) {
       delete cas[ca];
     }
   }
@@ -141,6 +141,7 @@ async function processQueue() {
   isProcessingQueue = false;
   updateForwardInProgress(false)
 }
+
 
 async function processForwardedCA(caMsg: ForwardRequest) {
   const { ca, ticker, chatTitle, timestamp } = caMsg;

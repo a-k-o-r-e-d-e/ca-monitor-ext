@@ -20,16 +20,8 @@ let runtimeSettings: RuntimeSettings | null = {
 };
 
 const seenMessageIds = new Set<string>();
-let forwardInProgress = false;
 let chatLoopIndex = 0;
 
-chrome.runtime.onMessage.addListener((message) => {
-  console.log("[ContentScript] Message received:", message.type);
-  if (message.type === "SET_FORWARD_IN_PROGRESS") {
-    forwardInProgress = message.data.inProgress;
-    console.log("[ContentScript] Forwarding state updated:", forwardInProgress);
-  }
-});
 
 async function loadSettings(): Promise<RuntimeSettings> {
   return new Promise((resolve) => {
@@ -356,7 +348,26 @@ function getNextChat (watchedChats: string[] = []): string {
   return nextChat; 
 }
 
+async function isForwardInProgress(): Promise<boolean> {
+  const result = await chrome.storage.local.get("forwardInProgress");
+  return result.forwardInProgress === true;
+}
+
 async function scanAllWatchedChatsWithUnread() {
+  // Wait if a forward is in progress (but no longer than 20 seconds total)
+  let waited = 0;
+  const maxWait = 20000; // 20 seconds
+
+  while ((await isForwardInProgress()) && waited < maxWait) {
+    console.log("[Chat Scanner] Forward in progress. Waiting...");
+    await new Promise((res) => setTimeout(res, 1000));
+    waited += 1000;
+  }
+
+  if (waited >= maxWait) {
+    console.warn("[Chat Scanner] Waited 20 seconds, continuing anyway...");
+  }
+
   await loadSettings();
   const watchedChats = await getWatchedChats();
 

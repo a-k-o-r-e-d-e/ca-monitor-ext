@@ -1,3 +1,5 @@
+// background.ts
+
 import { formatDistanceToNow, formatISO } from "date-fns";
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -75,6 +77,13 @@ async function markCaAsProcessed(ca: string, ticker: string): Promise<void> {
   await saveProcessedCAs();
 }
 
+async function updateForwardInProgress(
+  inProgress: boolean
+): Promise<void> {
+  await chrome.storage.local.set({ forwardInProgress: inProgress });
+  console.log("[Storage] Updated forwardInProgress:", inProgress);
+}
+
 async function pruneOldProcessedCAs(): Promise<void> {
   const cas = processedCAsCache;
   const now = Math.floor(Date.now() / 1000);
@@ -117,6 +126,7 @@ async function processQueue() {
   }
 
   isProcessingQueue = true;
+  await updateForwardInProgress(true);
   console.log("[Queue] Processing started... ");
 
   while (forwardQueue.length > 0) {
@@ -126,15 +136,14 @@ async function processQueue() {
     try {
       await processForwardedCA(request);
     } finally {
-      // Always remove the item from the queue after processing
-      // regardless of success or failure
       console.log("[Queue] Request processed, removing from queue...");
       forwardQueue.shift(); // Remove after processing
-      saveQueueToStorage(); // Save updated queue
+      await saveQueueToStorage(); // Save updated queue
     }
   }
 
   isProcessingQueue = false;
+  updateForwardInProgress(false)
 }
 
 async function processForwardedCA(caMsg: ForwardRequest) {

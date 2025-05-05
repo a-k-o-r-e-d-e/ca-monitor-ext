@@ -32,17 +32,13 @@ let forwardQueue: ForwardRequest[] = [];
 let processedCAsCache: ProcessedCAsMap = {};
 let isProcessingQueue = false;
 
-chrome.runtime.onStartup.addListener(() => {
+function initializeBackgroundState() {
   loadQueueFromStorage();
-  loadProcessedCAsFromStorage().then(() => {
-    pruneOldProcessedCAs();
-  });
-});
+  loadProcessedCAsFromStorage().then(pruneOldProcessedCAs);
+}
 
-chrome.runtime.onInstalled.addListener(() => {
-  loadQueueFromStorage();
-  loadProcessedCAsFromStorage();
-});
+chrome.runtime.onStartup.addListener(initializeBackgroundState);
+chrome.runtime.onInstalled.addListener(initializeBackgroundState);
 
 async function saveQueueToStorage() {
   await chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: forwardQueue });

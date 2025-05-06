@@ -145,7 +145,7 @@ async function processQueue() {
 
 async function processForwardedCA(caMsg: ForwardRequest) {
   const { ca, ticker, chatTitle, timestamp } = caMsg;
-  console.log("[Background] Processing forwarded CA:", ca, "ticker:", ticker);
+  console.log("[Background] Processing forwarded-- Source: ", chatTitle, " CA:", ca, "ticker:", ticker);
 
   // ⏱️ Ignore messages older than 10 minutes
   const timestampSeconds = parseInt(timestamp, 10);
@@ -161,7 +161,7 @@ async function processForwardedCA(caMsg: ForwardRequest) {
     const datetime = formatISO(timestampSeconds * 1000);
 
     console.log(
-      `[CA Message too old]. Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
+      `[CA Message too old]. Source: ${chatTitle} --- Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
     );
     return;
   }

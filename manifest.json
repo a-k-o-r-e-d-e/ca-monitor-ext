@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Telegram CA Monitor",
+  "name": "Coin Shill Monitor",
   "version": "1.0",
-  "description": "Monitors Telegram Web for CAs and forwards to Trojan bot.",
+  "description": "Monitors Telegram Web for Shilled CAs and forwards to Trojan bot.",
   "permissions": ["storage", "scripting", "activeTab"],
   "host_permissions": ["https://web.telegram.org/*"],
   "background": {

@@ -1,5 +1,5 @@
 {
-  "name": "ca-monitor-ext-002",
+  "name": "shilled-coins-monitor-ext",
   "private": true,
   "version": "0.0.0",
   "type": "module",

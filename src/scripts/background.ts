@@ -209,7 +209,7 @@ async function sendToForwardTarget(
 
   const originalChatTitle = senderChatTitle ?? getCurrentChatTitle();
   console.log("Original chat title:", originalChatTitle);
-  const targetChatName = "Ext Test R";
+  const targetChatName = "Trojan on Solana - Odysseus";
 
   // Step 1: Navigate to target chat
   const chatListContainer = document.querySelector(".chatlist");

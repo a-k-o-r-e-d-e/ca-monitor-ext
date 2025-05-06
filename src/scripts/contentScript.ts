@@ -204,7 +204,7 @@ async function scanUnreadMessages() {
 //   observer.observe(container, { childList: true, subtree: true });
 // }
 
-const pollRecentMessages = setInterval(async () => {
+setInterval(async () => {
   if (document.querySelector(".bubbles-group")) {
     console.log("[Monitor] Chat loaded, Clearing interval...");
     const isChatWatched = await isWatchedChat();

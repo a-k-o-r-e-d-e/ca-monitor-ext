@@ -92,10 +92,10 @@ async function pruneOldProcessedCAs(): Promise<void> {
   await saveProcessedCAs();
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _, __) => {
   console.log("[Background] Message received:", message.type);
   if (message.type === "FORWARD_CA") {
-    const { ca, ticker, chatTitle, timestamp } = message.data;
+    const { ca, ticker } = message.data;
 
     if (processedCAsCache[ca]) {
       console.log(`[Background] CA already processed: ${ca}`);

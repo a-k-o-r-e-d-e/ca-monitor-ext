@@ -179,31 +179,6 @@ async function scanUnreadMessages() {
   }
 }
 
-// function observeNewMessages() {
-//   const container = document.querySelector(".bubbles-group");
-//   if (!container) return;
-
-//   const observer = new MutationObserver((mutations) => {
-//     for (const mutation of mutations) {
-//       mutation.addedNodes.forEach(async (node) => {
-//         if (node instanceof HTMLElement && node.classList.contains("bubble")) {
-//           const isChatWatched = await isWatchedChat();
-//           if (!isChatWatched) {
-//             console.log(
-//               "[New Message Mutation] Not in watched chat, skipping..."
-//             );
-//             return;
-//           }
-//           console.log("[New Message Mutation] New message detected:", node);
-//           processMessageBubble(node);
-//         }
-//       });
-//     }
-//   });
-
-//   observer.observe(container, { childList: true, subtree: true });
-// }
-
 setInterval(async () => {
   if (document.querySelector(".bubbles-group")) {
     console.log("[Monitor] Chat loaded, Clearing interval...");
@@ -219,58 +194,10 @@ setInterval(async () => {
   }
 }, 25000);
 
-// async function initTelegramMessageMonitor() {
-//   scanUnreadMessages();
-//   observeNewMessages();
-// }
-
-// async function startIfWatchedChat() {
-//   console.log("[Monitor] Starting Telegram message monitor...");
-//   await loadSettings();
-
-//   const isChatWatched = await isWatchedChat();
-//   if (!isChatWatched) {
-//     console.log("[startIfWatchedChat] Chat not watched, skipping...");
-//     return;
-//   }
-
-//   console.log(
-//     "[startIfWatchedChat] Chat is in watched list, starting monitor..."
-//   );
-//   initTelegramMessageMonitor();
-
-//   setInterval(async () => {
-//     console.log("[Monitor] Forward in progress:", forwardInProgress);
-//     if (forwardInProgress) {
-//       console.log("[Monitor] Forward in progress, skipping polling...");
-//       return;
-//     }
-
-//     console.log("[Monitor] Polling recent messages...");
-//     const isChatWatched = await isWatchedChat();
-//     if (!isChatWatched) {
-//       console.log("[Poll Interval] Not in watched chat, skipping...");
-//       return;
-//     }
-
-//     pollRecentMessages();
-//   }, 25000);
-// }
-
-// const waitForChatLoad = setInterval(() => {
-//   console.log("[Monitor] Waiting for chat to load...");
-//   if (document.querySelector(".bubbles-group")) {
-//     clearInterval(waitForChatLoad);
-//     console.log("[Monitor] Chat loaded, Clearing interval...");
-//     startIfWatchedChat();
-//   } else {
-//     console.log("[Monitor] Chat not loaded yet, retrying...");
-//   }
-// }, 500);
 
 function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
-  const CA_REGEX = /0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
   const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
 
   const caMatches = msg.text.match(CA_REGEX);

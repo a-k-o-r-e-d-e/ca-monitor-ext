@@ -1,6 +1,9 @@
 // background.ts
 
-import { formatDistanceToNow, formatISO } from "date-fns";
+import { differenceInSeconds, formatDistanceToNow, formatISO, isValid, parseISO } from "date-fns";
+
+// const destChatName: string = "Trojan on Solana - Odysseus";
+const destChatName = "Ext Test R"
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
@@ -9,6 +12,38 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   console.log("Telegram CA Monitor started");
 });
+
+// chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+//   if (
+//     changeInfo.status === "complete" &&
+//     tab.url?.startsWith("https://web.telegram.org/")
+//   ) {
+//     console.log("[Background] Telegram tab updated. Triggering scan...");
+
+//     // Trigger scan via content script
+//     chrome.scripting.executeScript({
+//       target: { tabId },
+//       func: () => {
+//         window.postMessage({ type: "START_SCAN" }, "*");
+//       },
+//     });
+//   }
+// });
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const tabs = await chrome.tabs.query({ url: "*://web.telegram.org/*" });
+  for (const tab of tabs) {
+    if (tab.id) {
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          window.postMessage({ type: "START_SCAN" }, "*");
+        },
+      });
+    }
+  }
+});
+
 
 interface ForwardRequest {
   ca: string;
@@ -19,7 +54,8 @@ interface ForwardRequest {
 
 interface ProcessedCAEntry {
   ticker: string;
-  firstSeen: string;
+  firstSeen: string; // when first detected
+  lastSeen: string; // when most recently seen
 }
 type ProcessedCAsMap = Record<string, ProcessedCAEntry>;
 
@@ -35,6 +71,7 @@ let isProcessingQueue = false;
 function initializeBackgroundState() {
   loadQueueFromStorage();
   loadProcessedCAsFromStorage().then(pruneOldProcessedCAs);
+  startTelegramPolling();
 }
 
 chrome.runtime.onStartup.addListener(initializeBackgroundState);
@@ -64,14 +101,24 @@ async function saveProcessedCAs(): Promise<void> {
   console.log("[Storage] Saved processed CAs to storage:", processedCAsCache);
 }
 
-async function markCaAsProcessed(ca: string, ticker: string): Promise<void> {
-  processedCAsCache[ca] = {
-    ticker,
-    firstSeen: new Date().toISOString(),
-  };
+async function updateProcessedCA(ca: string, ticker = "") {
+  const now = formatISO(new Date());
+  if (processedCAsCache[ca]) {
+    processedCAsCache[ca].lastSeen = now;
+    if (ticker && !processedCAsCache[ca].ticker) {
+      processedCAsCache[ca].ticker = ticker;
+    }
+  } else {
+    processedCAsCache[ca] = {
+      ticker,
+      firstSeen: now,
+      lastSeen: now,
+    };
+  }
 
   await saveProcessedCAs();
 }
+
 
 async function updateForwardInProgress(
   inProgress: boolean
@@ -81,15 +128,42 @@ async function updateForwardInProgress(
 }
 
 async function pruneOldProcessedCAs(): Promise<void> {
-  const cas = processedCAsCache;
-  const now = Math.floor(Date.now() / 1000);
-  for (const [ca, entry] of Object.entries(cas)) {
-    const timestampMs = Date.parse(entry.firstSeen);
-    if (now - Math.floor(timestampMs / 1000) > MAX_PROCESSED_AGE) {
-      delete cas[ca];
+  const now = new Date();
+
+  for (const [ca, entry] of Object.entries(processedCAsCache)) {
+    const seenDate = parseISO(entry.firstSeen);
+
+    if (!isValid(seenDate)) {
+      console.warn(
+        `[Prune] Skipping invalid date for CA: ${ca}`,
+        entry.firstSeen
+      );
+      continue;
+    }
+
+    const ageInSeconds = differenceInSeconds(now, seenDate);
+
+    if (ageInSeconds > MAX_PROCESSED_AGE) {
+      console.log(`[Prune] Removing old CA: ${ca}, age: ${ageInSeconds}s`);
+      delete processedCAsCache[ca];
     }
   }
+
   await saveProcessedCAs();
+}
+
+function startTelegramPolling() {
+  setInterval(async () => {
+    if (!isProcessingQueue) {
+      const tabs = await chrome.tabs.query({ url: "*://web.telegram.org/*" });
+      if (tabs.length > 0 && forwardQueue.length > 0) {
+        console.log(
+          "[Polling] Telegram is open. Attempting to process queue..."
+        );
+        processQueue();
+      }
+    }
+  }, 45_000); // every 30 seconds
 }
 
 chrome.runtime.onMessage.addListener((message, _, __) => {
@@ -99,11 +173,15 @@ chrome.runtime.onMessage.addListener((message, _, __) => {
 
     if (processedCAsCache[ca]) {
       console.log(`[Background] CA already processed: ${ca}`);
+      // Mark CA as processed
+      updateProcessedCA(ca, ticker).catch((error) => {
+        console.error("[Background] Error marking CA as processed:", error);
+      });
       return;
     }
 
     // Mark CA as processed
-    markCaAsProcessed(ca, ticker).catch((error) => {
+    updateProcessedCA(ca, ticker).catch((error) => {
       console.error("[Background] Error marking CA as processed:", error);
     });
 
@@ -121,6 +199,13 @@ async function processQueue() {
     return;
   }
 
+  // Check if Telegram is open
+  const tabs = await chrome.tabs.query({ url: "*://web.telegram.org/*" });
+  if (tabs.length === 0) {
+    console.warn("[Queue] Telegram is not open, deferring processing...");
+    return;
+  }
+
   isProcessingQueue = true;
   await updateForwardInProgress(true);
   console.log("[Queue] Processing started... ");
@@ -131,15 +216,18 @@ async function processQueue() {
 
     try {
       await processForwardedCA(request);
-    } finally {
+
       console.log("[Queue] Request processed, removing from queue...");
       forwardQueue.shift(); // Remove after processing
       await saveQueueToStorage(); // Save updated queue
+    } catch (error) {
+      console.error("[Queue] Error processing request:", error);
+      // Optionally, you can break the loop or handle the error as needed
     }
   }
 
   isProcessingQueue = false;
-  updateForwardInProgress(false)
+  updateForwardInProgress(false);
 }
 
 
@@ -166,11 +254,17 @@ async function processForwardedCA(caMsg: ForwardRequest) {
     return;
   }
 
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const activeTab = tabs[0];
-  if (activeTab?.id) {
+  const tabs = await chrome.tabs.query({ url: "*://web.telegram.org/*" });
+  const telegramTab = tabs[0]; // use the first matching Telegram tab
+
+  if (!telegramTab) {
+    console.warn("[Queue] No Telegram tab found.");
+    throw new Error("Telegram tab not found");
+  }
+
+  if (telegramTab?.id) {
     await chrome.scripting.executeScript({
-      target: { tabId: activeTab.id },
+      target: { tabId: telegramTab.id },
       func: sendToForwardTarget,
       args: [ca, ticker, chatTitle],
     });
@@ -209,7 +303,7 @@ async function sendToForwardTarget(
 
   const originalChatTitle = senderChatTitle ?? getCurrentChatTitle();
   console.log("Original chat title:", originalChatTitle);
-  const targetChatName = "Trojan on Solana - Odysseus";
+  const targetChatName: string = destChatName;
 
   // Step 1: Navigate to target chat
   const chatListContainer = document.querySelector(".chatlist");
@@ -220,14 +314,18 @@ async function sendToForwardTarget(
     return titleEl?.textContent?.trim().includes(targetChatName);
   });
 
-  if (!targetChat) return;
+  if (!targetChat) {
+    throw new Error(`Target chat [${targetChatName}] not found`);
+  }
 
   targetChat.scrollIntoView({ behavior: "auto", block: "center" });
   targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   targetChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
   const loaded = await waitForTargetChatLoad(targetChatName);
-  if (!loaded) return;
+  if (!loaded) {
+    throw new Error(`Failed to load target chat [${targetChatName}]`);
+  }
 
   // Step 2: Send the CA message
   const input = document.querySelector(

@@ -2,6 +2,16 @@
 
 import { formatDistanceToNow, formatISO } from "date-fns";
 
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  if (event.data?.type === "START_SCAN") {
+    console.log(
+      `[Content Script] START_SCAN received at ${new Date().toISOString()}`
+    );
+    scanAllWatchedChatsWithUnread();
+  }
+});
+
 interface MessageData {
   mid: string;
   timestamp: string;
@@ -197,7 +207,7 @@ setInterval(async () => {
 
 function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
-  const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
   const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
 
   const caMatches = msg.text.match(CA_REGEX);
@@ -241,8 +251,6 @@ async function openChatByTitle(title: string): Promise<boolean> {
     const label = item.querySelector('.user-title .peer-title')?.textContent?.trim();
     const unreadBadge = item.querySelector(".dialog-subtitle-badge-unread");
 
-    console.log("Chat item label:", label);
-
     if (label === title) {
       if (unreadBadge) {
         simulateClick(item);
@@ -261,10 +269,11 @@ async function openChatByTitle(title: string): Promise<boolean> {
       console.log(
         `[Chat Found] Chat "${title}" has no unread messages.`
       );
-      break;
+      return false;
     }
   }
 
+  console.log(`[Chat Not Found] Chat "${title}" not found in sidebar.`);
   return false;
 }
 
@@ -276,8 +285,13 @@ function getNextChat (watchedChats: string[] = []): string {
 }
 
 async function isForwardInProgress(): Promise<boolean> {
-  const result = await chrome.storage.local.get("forwardInProgress");
+  try {
+    const result = await chrome.storage.local.get("forwardInProgress");
   return result.forwardInProgress === true;
+  } catch (error) {
+    console.error("Error checking forwardInProgress:", error);
+    return false;
+  }
 }
 
 async function scanAllWatchedChatsWithUnread() {

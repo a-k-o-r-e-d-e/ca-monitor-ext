@@ -2,8 +2,8 @@
 
 import { formatDistanceToNow, formatISO } from "date-fns";
 
-// const destChatName: string = "Trojan on Solana - Odysseus";
-const destChatName = "Ext Test R";
+const trojanBotChat: string = "Trojan on Solana - Odysseus";
+const extTestReceiverChat = "Ext Test R";
 
 chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
   console.log("[listener] Message received:", message.type);
@@ -13,7 +13,14 @@ chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
       ca,
       ticker,
       sourceChat: chatTitle,
-      destChat: destChatName,
+      destChat: trojanBotChat,
+    });
+
+    await sendToForwardTarget({
+      ca,
+      ticker,
+      sourceChat: chatTitle,
+      destChat: extTestReceiverChat,
     });
 
     sendResponse({ done: true });

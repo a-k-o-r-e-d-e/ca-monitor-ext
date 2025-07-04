@@ -2,6 +2,19 @@
 
 import { formatDistanceToNow, formatISO } from "date-fns";
 
+// const destChatName: string = "Trojan on Solana - Odysseus";
+const destChatName = "Ext Test R"
+
+chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
+  console.log("[listener] Message received:", message.type);
+  if (message.type === "FORWARD_CA") {
+    const {ca, ticker, chatTitle} = message.data
+    await sendToForwardTarget(ca, ticker, chatTitle)
+
+    sendResponse({done: true})
+  }
+});
+
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   if (event.data?.type === "START_SCAN") {
@@ -107,8 +120,8 @@ async function processMessageBubble(el: Element) {
   //   return;
   // }
   const data = extractMessageData(el);
-  if (!data || seenMessageIds.has(data.mid)) {
-    console.log("[Message already seen or invalid data]", data);
+  if (!data) {
+    console.log("[Message: invalid data]", data);
     return;
   }
 
@@ -132,7 +145,7 @@ async function processMessageBubble(el: Element) {
     return; // 600 seconds = 10 minutes
   }
 
-  seenMessageIds.add(data.mid);
+  // seenMessageIds.add(data.mid);
   console.log("[New Message]", data);
   processMessageData(data);
 }
@@ -190,6 +203,11 @@ async function scanUnreadMessages() {
 }
 
 setInterval(async () => {
+  if (await isForwardInProgress()) {
+    console.log("Forard in progress,early return")
+    return
+  }
+
   if (document.querySelector(".bubbles-group")) {
     console.log("[Monitor] Chat loaded, Clearing interval...");
     const isChatWatched = await isWatchedChat();
@@ -218,11 +236,11 @@ function processMessageData(msg: MessageData) {
     const firstTicker = tickerMatches?.[0] || "";
 
     console.log(
-      `[Monitor] Forwarding: CA = ${firstCA}, Ticker = ${firstTicker}`
+      `[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`
     );
 
     chrome.runtime.sendMessage({
-      type: "FORWARD_CA",
+      type: "QUEUE_CA",
       data: {
         ca: firstCA,
         ticker: firstTicker,
@@ -287,7 +305,8 @@ function getNextChat (watchedChats: string[] = []): string {
 async function isForwardInProgress(): Promise<boolean> {
   try {
     const result = await chrome.storage.local.get("forwardInProgress");
-  return result.forwardInProgress === true;
+    console.log("Result InPogress: ", result);
+   return result.forwardInProgress === true;
   } catch (error) {
     console.error("Error checking forwardInProgress:", error);
     return false;
@@ -297,12 +316,12 @@ async function isForwardInProgress(): Promise<boolean> {
 async function scanAllWatchedChatsWithUnread() {
   // Wait if a forward is in progress (but no longer than 20 seconds total)
   let waited = 0;
-  const maxWait = 20000; // 20 seconds
+  const maxWait = 30000; // 20 seconds
 
   while ((await isForwardInProgress()) && waited < maxWait) {
     console.log("[Chat Scanner] Forward in progress. Waiting...");
     await new Promise((res) => setTimeout(res, 1000));
-    waited += 1000;
+    waited += 2000;
   }
 
   if (waited >= maxWait) {
@@ -325,6 +344,129 @@ async function scanAllWatchedChatsWithUnread() {
   setTimeout(scanAllWatchedChatsWithUnread, 15000);
 }
 
+async function sendToForwardTarget(
+  ca: string,
+  ticker: string,
+  senderChatTitle: string
+) {
+  // await updateForwardInProgress(true);
+  console.log("[Send to Forward Target] Called...");
+  console.log("[Send to Forward Target] Another Call Called...");
+  function getCurrentChatTitle(): string | null {
+    const titleEl = document.querySelector(
+      '[class*="chat-info"] [class*="title"]'
+    );
+    return titleEl?.textContent?.trim() || null;
+  }
+
+  async function waitForTargetChatLoad(
+    expectedTitle: string,
+    timeoutMs = 5000
+  ): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const titleEl = document.querySelector(
+        '[class*="chat-info"] [class*="title"]'
+      );
+      const currentTitle = titleEl?.textContent?.trim();
+      if (currentTitle?.includes(expectedTitle)) return true;
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    return false;
+  }
+
+  console.log("Before get current chat");
+
+  const originalChatTitle = senderChatTitle ?? getCurrentChatTitle();
+  console.log("After Get Current Chat");
+  const targetChatName: string = destChatName;
+
+  console.log(
+    `Source chat: ${originalChatTitle} -- Dest Chat: ${targetChatName}  -- Timestamp: ${new Date().toISOString()}`
+  );
+
+  // Step 1: Navigate to target chat
+  const chatListContainer = document.querySelector(".chatlist");
+  const chatList = chatListContainer?.querySelectorAll("a.chatlist-chat") || [];
+
+  const targetChat = Array.from(chatList).find((el) => {
+    const titleEl = el.querySelector(".user-title");
+    return titleEl?.textContent?.trim().includes(targetChatName);
+  });
+
+  if (!targetChat) {
+    const errMsg = `Target chat [${targetChatName}] not found -- Timestamp: ${new Date().toISOString()}`;
+    console.log(errMsg);
+    throw new Error(errMsg);
+  }
+
+  console.log(`Chat found -- Timestamp: ${new Date().toISOString()}`);
+
+  targetChat.scrollIntoView({ behavior: "auto", block: "center" });
+  targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  targetChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+  const loaded = await waitForTargetChatLoad(targetChatName);
+  if (!loaded) {
+    const errMsg = `Failed to load target chat [${targetChatName}] -- Timestamp: ${new Date().toISOString()}`;
+    console.log(errMsg);
+    throw new Error(errMsg);
+  }
+
+  // Step 2: Send the CA message
+  const input = document.querySelector(
+    '[contenteditable="true"]'
+  ) as HTMLElement;
+  if (!input) return;
+
+  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
+
+  input.focus();
+  const pasteEvent = new ClipboardEvent("paste", {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: new DataTransfer(),
+  });
+  pasteEvent.clipboardData?.setData("text/plain", messageText);
+  input.dispatchEvent(pasteEvent);
+
+  const sendButton = document.querySelector(".btn-send");
+  if (sendButton instanceof HTMLElement) {
+    sendButton.click();
+  }
+
+  await new Promise((res) => setTimeout(res, 1000));
+  console.log("CA sent successfully to target chat.");
+
+  console.log(
+    "[xxxx] Attempting to navigate back to original chat...",
+    originalChatTitle
+  );
+
+  // Step 3: Navigate back to original chat
+  if (originalChatTitle) {
+    const originalChat = Array.from(chatList).find((el) => {
+      const titleEl = el.querySelector(".user-title");
+      return titleEl?.textContent?.trim() === originalChatTitle;
+    });
+
+    if (!originalChat) {
+      console.log(`Original chat [${originalChatTitle}] not found`);
+      return;
+    }
+
+    console.log(
+      "Simulating click to navigate back to original chat: ",
+      originalChatTitle
+    );
+    originalChat.scrollIntoView({ behavior: "auto", block: "center" });
+    originalChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await waitForTargetChatLoad(originalChatTitle);
+  }
+}
+
 // Wait for Telegram UI to be ready
 const waitForSidebarLoad = setInterval(() => {
   if (document.querySelector(".chatlist .chatlist-chat")) {
@@ -335,3 +477,4 @@ const waitForSidebarLoad = setInterval(() => {
     console.log("[Init] Waiting for sidebar...");
   }
 }, 500);
+

@@ -2,9 +2,6 @@
 
 import { differenceInSeconds, formatDistanceToNow, formatISO, isValid, parseISO } from "date-fns";
 
-// const destChatName: string = "Trojan on Solana - Odysseus";
-const destChatName = "Ext Test R"
-
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
 });
@@ -168,7 +165,7 @@ function startTelegramPolling() {
 
 chrome.runtime.onMessage.addListener((message, _, __) => {
   console.log("[Background] Message received:", message.type);
-  if (message.type === "FORWARD_CA") {
+  if (message.type === "QUEUE_CA") {
     const { ca, ticker } = message.data;
 
     if (processedCAsCache[ca]) {
@@ -215,7 +212,7 @@ async function processQueue() {
     console.log("[Queue] Processing request:", request);
 
     try {
-      await processForwardedCA(request);
+      await processQueuedCA(request);
 
       console.log("[Queue] Request processed, removing from queue...");
       forwardQueue.shift(); // Remove after processing
@@ -231,9 +228,9 @@ async function processQueue() {
 }
 
 
-async function processForwardedCA(caMsg: ForwardRequest) {
+async function processQueuedCA(caMsg: ForwardRequest) {
   const { ca, ticker, chatTitle, timestamp } = caMsg;
-  console.log("[Background] Processing forwarded-- Source: ", chatTitle, " CA:", ca, "ticker:", ticker);
+  console.log("[Background] Processing queued CA-- Source: ", chatTitle, " CA:", ca, "ticker:", ticker);
 
   // ⏱️ Ignore messages older than 10 minutes
   const timestampSeconds = parseInt(timestamp, 10);
@@ -254,129 +251,27 @@ async function processForwardedCA(caMsg: ForwardRequest) {
     return;
   }
 
-  const tabs = await chrome.tabs.query({ url: "*://web.telegram.org/*" });
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+
   const telegramTab = tabs[0]; // use the first matching Telegram tab
 
-  if (!telegramTab) {
-    console.warn("[Queue] No Telegram tab found.");
-    throw new Error("Telegram tab not found");
-  }
-
-  if (telegramTab?.id) {
-    await chrome.scripting.executeScript({
-      target: { tabId: telegramTab.id },
-      func: sendToForwardTarget,
-      args: [ca, ticker, chatTitle],
-    });
-    console.log("[Queue] CA forwarding Done.");
-  }
-}
-
-async function sendToForwardTarget(
-  ca: string,
-  ticker: string,
-  senderChatTitle: string
-) {
-  console.log("[Send to Forward Target] Called...");
-  function getCurrentChatTitle(): string | null {
-    const titleEl = document.querySelector(
-      '[class*="chat-info"] [class*="title"]'
-    );
-    return titleEl?.textContent?.trim() || null;
-  }
-
-  async function waitForTargetChatLoad(
-    expectedTitle: string,
-    timeoutMs = 5000
-  ): Promise<boolean> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const titleEl = document.querySelector(
-        '[class*="chat-info"] [class*="title"]'
-      );
-      const currentTitle = titleEl?.textContent?.trim();
-      if (currentTitle?.includes(expectedTitle)) return true;
-      await new Promise((res) => setTimeout(res, 200));
+    if (!telegramTab) {
+      console.warn("[Queue] No Telegram tab found.");
+      throw new Error("Telegram tab not found");
     }
-    return false;
-  }
-
-  const originalChatTitle = senderChatTitle ?? getCurrentChatTitle();
-  console.log("Original chat title:", originalChatTitle);
-  const targetChatName: string = destChatName;
-
-  // Step 1: Navigate to target chat
-  const chatListContainer = document.querySelector(".chatlist");
-  const chatList = chatListContainer?.querySelectorAll("a.chatlist-chat") || [];
-
-  const targetChat = Array.from(chatList).find((el) => {
-    const titleEl = el.querySelector(".user-title");
-    return titleEl?.textContent?.trim().includes(targetChatName);
-  });
-
-  if (!targetChat) {
-    throw new Error(`Target chat [${targetChatName}] not found`);
-  }
-
-  targetChat.scrollIntoView({ behavior: "auto", block: "center" });
-  targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  targetChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-  const loaded = await waitForTargetChatLoad(targetChatName);
-  if (!loaded) {
-    throw new Error(`Failed to load target chat [${targetChatName}]`);
-  }
-
-  // Step 2: Send the CA message
-  const input = document.querySelector(
-    '[contenteditable="true"]'
-  ) as HTMLElement;
-  if (!input) return;
-
-  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
-
-  input.focus();
-  const pasteEvent = new ClipboardEvent("paste", {
-    bubbles: true,
-    cancelable: true,
-    clipboardData: new DataTransfer(),
-  });
-  pasteEvent.clipboardData?.setData("text/plain", messageText);
-  input.dispatchEvent(pasteEvent);
-
-  const sendButton = document.querySelector(".btn-send");
-  if (sendButton instanceof HTMLElement) {
-    sendButton.click();
-  }
-
-  await new Promise((res) => setTimeout(res, 1000));
-  console.log("CA sent successfully to target chat.");
-
-  console.log(
-    "[xxxx] Attempting to navigate back to original chat...",
-    originalChatTitle
-  );
-
-  // Step 3: Navigate back to original chat
-  if (originalChatTitle) {
-    const originalChat = Array.from(chatList).find((el) => {
-      const titleEl = el.querySelector(".user-title");
-      return titleEl?.textContent?.trim() === originalChatTitle;
+    const response = await chrome.tabs.sendMessage(telegramTab.id!, {
+      type: "FORWARD_CA",
+      data: {
+        ca: ca,
+        ticker: ticker,
+        chatTitle: chatTitle,
+        // timestamp: msg.timestamp,
+      },
     });
 
-    if (!originalChat) {
-      console.log(`Original chat [${originalChatTitle}] not found`);
-      return;
-    }
+    console.log("Response:: ", response)
+  
 
-    console.log(
-      "Simulating click to navigate back to original chat: ",
-      originalChatTitle
-    );
-    originalChat.scrollIntoView({ behavior: "auto", block: "center" });
-    originalChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    await waitForTargetChatLoad(originalChatTitle);
-  }
+  console.log("Gibberish")
 }
+

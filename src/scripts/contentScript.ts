@@ -3,15 +3,20 @@
 import { formatDistanceToNow, formatISO } from "date-fns";
 
 // const destChatName: string = "Trojan on Solana - Odysseus";
-const destChatName = "Ext Test R"
+const destChatName = "Ext Test R";
 
 chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
   console.log("[listener] Message received:", message.type);
   if (message.type === "FORWARD_CA") {
-    const {ca, ticker, chatTitle} = message.data
-    await sendToForwardTarget(ca, ticker, chatTitle)
+    const { ca, ticker, chatTitle } = message.data;
+    await sendToForwardTarget({
+      ca,
+      ticker,
+      sourceChat: chatTitle,
+      destChat: destChatName,
+    });
 
-    sendResponse({done: true})
+    sendResponse({ done: true });
   }
 });
 
@@ -44,7 +49,6 @@ let runtimeSettings: RuntimeSettings | null = {
 
 const seenMessageIds = new Set<string>();
 let chatLoopIndex = 0;
-
 
 async function loadSettings(): Promise<RuntimeSettings> {
   return new Promise((resolve) => {
@@ -113,7 +117,7 @@ function extractMessageData(el: Element): MessageData | null {
 }
 
 async function processMessageBubble(el: Element) {
-  console.log("[Processing Message Bubble]",);
+  console.log("[Processing Message Bubble]");
   // const isChatWatched = await isWatchedChat();
   // if (!isChatWatched) {
   //   console.log("[Process Message Bubble] Not in watched chat, skipping...");
@@ -204,8 +208,8 @@ async function scanUnreadMessages() {
 
 setInterval(async () => {
   if (await isForwardInProgress()) {
-    console.log("Forard in progress,early return")
-    return
+    console.log("Forard in progress,early return");
+    return;
   }
 
   if (document.querySelector(".bubbles-group")) {
@@ -222,7 +226,6 @@ setInterval(async () => {
   }
 }, 25000);
 
-
 function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
   const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
@@ -235,9 +238,7 @@ function processMessageData(msg: MessageData) {
     const firstCA = caMatches[0];
     const firstTicker = tickerMatches?.[0] || "";
 
-    console.log(
-      `[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`
-    );
+    console.log(`[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`);
 
     chrome.runtime.sendMessage({
       type: "QUEUE_CA",
@@ -266,7 +267,9 @@ async function openChatByTitle(title: string): Promise<boolean> {
 
   console.log("Expected Chat Title:", title);
   for (const item of sidebarItems) {
-    const label = item.querySelector('.user-title .peer-title')?.textContent?.trim();
+    const label = item
+      .querySelector(".user-title .peer-title")
+      ?.textContent?.trim();
     const unreadBadge = item.querySelector(".dialog-subtitle-badge-unread");
 
     if (label === title) {
@@ -284,9 +287,7 @@ async function openChatByTitle(title: string): Promise<boolean> {
         }
       }
 
-      console.log(
-        `[Chat Found] Chat "${title}" has no unread messages.`
-      );
+      console.log(`[Chat Found] Chat "${title}" has no unread messages.`);
       return false;
     }
   }
@@ -295,18 +296,18 @@ async function openChatByTitle(title: string): Promise<boolean> {
   return false;
 }
 
-function getNextChat (watchedChats: string[] = []): string {
+function getNextChat(watchedChats: string[] = []): string {
   const nextIndex = (chatLoopIndex + 1) % watchedChats.length;
   const nextChat = watchedChats[nextIndex];
   chatLoopIndex = nextIndex;
-  return nextChat; 
+  return nextChat;
 }
 
 async function isForwardInProgress(): Promise<boolean> {
   try {
     const result = await chrome.storage.local.get("forwardInProgress");
     console.log("Result InPogress: ", result);
-   return result.forwardInProgress === true;
+    return result.forwardInProgress === true;
   } catch (error) {
     console.error("Error checking forwardInProgress:", error);
     return false;
@@ -344,11 +345,17 @@ async function scanAllWatchedChatsWithUnread() {
   setTimeout(scanAllWatchedChatsWithUnread, 15000);
 }
 
-async function sendToForwardTarget(
-  ca: string,
-  ticker: string,
-  senderChatTitle: string
-) {
+async function sendToForwardTarget({
+  destChat,
+  ca,
+  ticker,
+  sourceChat,
+}: {
+  destChat: string;
+  ca: string;
+  ticker: string;
+  sourceChat: string;
+}) {
   // await updateForwardInProgress(true);
   console.log("[Send to Forward Target] Called...");
   console.log("[Send to Forward Target] Another Call Called...");
@@ -377,9 +384,9 @@ async function sendToForwardTarget(
 
   console.log("Before get current chat");
 
-  const originalChatTitle = senderChatTitle ?? getCurrentChatTitle();
+  const originalChatTitle = sourceChat ?? getCurrentChatTitle();
   console.log("After Get Current Chat");
-  const targetChatName: string = destChatName;
+  const targetChatName: string = destChat;
 
   console.log(
     `Source chat: ${originalChatTitle} -- Dest Chat: ${targetChatName}  -- Timestamp: ${new Date().toISOString()}`
@@ -477,4 +484,3 @@ const waitForSidebarLoad = setInterval(() => {
     console.log("[Init] Waiting for sidebar...");
   }
 }, 500);
-

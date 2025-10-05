@@ -4,6 +4,10 @@ import { formatDistanceToNow, formatISO } from "date-fns";
 
 const trojanBotChat: string = "Trojan on Solana - Odysseus";
 const extTestReceiverChat = "Ext Test R";
+const BUBBLES_GROUP_IDENTIFIER = ".bubbles-group";
+
+let scanUnreadChatsInProgress = false;
+let scanUnreadMsgsInProgress = false;
 
 chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
   console.log("[listener] Message received:", message.type);
@@ -16,12 +20,12 @@ chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
       destChat: trojanBotChat,
     });
 
-    await sendToForwardTarget({
-      ca,
-      ticker,
-      sourceChat: chatTitle,
-      destChat: extTestReceiverChat,
-    });
+    // await sendToForwardTarget({
+    //   ca,
+    //   ticker,
+    //   sourceChat: chatTitle,
+    //   destChat: extTestReceiverChat,
+    // });
 
     sendResponse({ done: true });
   }
@@ -60,7 +64,7 @@ let chatLoopIndex = 0;
 async function loadSettings(): Promise<RuntimeSettings> {
   return new Promise((resolve) => {
     if (runtimeSettings) {
-      console.log("Using cached runtime settings: ", runtimeSettings);
+      // console.log("Using cached runtime settings: ", runtimeSettings);
       resolve(runtimeSettings);
     }
 
@@ -72,6 +76,10 @@ async function loadSettings(): Promise<RuntimeSettings> {
       resolve(runtimeSettings);
     });
   });
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getWatchedChats(): Promise<string[]> {
@@ -87,11 +95,14 @@ async function getWatchedChats(): Promise<string[]> {
   // This is useful for testing or if the settings are not set yet
   return new Promise((resolve) => {
     chrome.storage.local.get("watchedChats", (result) => {
-      console.log("Watched chats from local storage:", result.watchedChats);
+      // console.log("Watched chats from local storage:", result.watchedChats);
       resolve(result.watchedChats || []);
     });
   });
 }
+
+const isBusy = () => scanUnreadChatsInProgress || scanUnreadMsgsInProgress;
+const getBubblesGroup = () => document.querySelector(BUBBLES_GROUP_IDENTIFIER);
 
 function getCurrentChatTitle(): string | null {
   const titleEl = document.querySelector(
@@ -142,22 +153,27 @@ async function processMessageBubble(el: Element) {
   const ageInSeconds = nowSeconds - timestampSeconds;
   const maxAge = 3 * 60 * 60; // 3 hours
 
+  const duration = formatDistanceToNow(timestampSeconds * 1000, {
+    addSuffix: true,
+  });
+  const datetime = formatISO(timestampSeconds * 1000);
+
   if (ageInSeconds > maxAge) {
-    const duration = formatDistanceToNow(timestampSeconds * 1000, {
-      addSuffix: true,
-    });
-    const datetime = formatISO(timestampSeconds * 1000);
+
+    // console.log(
+    //   `[Message too old]. Datetime: ${datetime} --- Age: ${duration} \n\n Data: ${JSON.stringify(
+    //     data
+    //   )}`
+    // );
 
     console.log(
-      `[Message too old]. Datetime: ${datetime} --- Age: ${duration} \n\n Data: ${JSON.stringify(
-        data
-      )}`
+      `[Message too old]. Datetime: ${datetime} --- Age: ${duration}`
     );
     return; // 600 seconds = 10 minutes
   }
 
   // seenMessageIds.add(data.mid);
-  console.log("[New Message]", data);
+  console.log(`[New Message]. Datetime: ${datetime} --- Age: ${duration}`)
   processMessageData(data);
 }
 
@@ -168,58 +184,73 @@ async function scanUnreadMessages() {
   //   return;
   // }
 
-  const container = document.querySelector(".bubbles-group");
-  if (!container) return;
+  scanUnreadMsgsInProgress = true;
 
-  let prevBubbleCount = 0;
-
-  // Progressive scroll until no new bubbles are loaded
-  while (true) {
-    const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
-    if (!firstUnreadEl) {
-      console.log("[Scan] No unread marker found. Exiting scan.");
-      break;
-    }
-
-    firstUnreadEl.scrollIntoView({ behavior: "auto", block: "center" });
-    await new Promise((res) => setTimeout(res, 300));
-
-    const bubbles = Array.from(document.querySelectorAll(".bubble"));
-    console.log("[Scan] Found bubbles:", bubbles.length);
-    const firstUnreadIndex = bubbles.indexOf(firstUnreadEl as Element);
-
-    if (firstUnreadIndex === -1) {
-      console.log("[Scan] Index of unread marker not found. Exiting scan.");
+  (async () => {
+    if (!getBubblesGroup()) {
+      scanUnreadMsgsInProgress = false;
+      console.log("[Scan] No Bubbles Group Found... Exiting");
       return;
     }
 
-    const unreadBubbles = bubbles.slice(firstUnreadIndex);
+    let prevBubbleCount = 0;
 
-    // Process newly revealed bubbles
-    for (const bubble of unreadBubbles) {
-      await processMessageBubble(bubble);
+    // Progressive scroll until no new bubbles are loaded
+    while (true) {
+      const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
+      if (!firstUnreadEl) {
+        console.log("[Scan] No unread marker found. Exiting scan.");
+        break;
+      }
+
+      firstUnreadEl.scrollIntoView({ behavior: "auto", block: "center" });
+      await sleep(300); // 300 milliseconds
+
+      const bubbles = Array.from(document.querySelectorAll(".bubble"));
+      console.log("[Scan] Found bubbles:", bubbles.length);
+      const firstUnreadIndex = bubbles.indexOf(firstUnreadEl as Element);
+
+      if (firstUnreadIndex === -1) {
+        console.log("[Scan] Index of unread marker not found. Exiting scan.");
+        return;
+      }
+
+      const unreadBubbles = bubbles.slice(firstUnreadIndex);
+
+      // Process newly revealed bubbles
+      for (const bubble of unreadBubbles) {
+        await processMessageBubble(bubble);
+      }
+
+      if (unreadBubbles.length === prevBubbleCount) {
+        console.log("[Scan] No more new unread messages revealed, stopping.");
+        break;
+      }
+
+      prevBubbleCount = unreadBubbles.length;
+
+      // Scroll just slightly past the last visible bubble
+      unreadBubbles.at(-1)?.scrollIntoView({ behavior: "auto", block: "end" });
+      await sleep(800); // sleep for 800 milliseconds
     }
-
-    if (unreadBubbles.length === prevBubbleCount) {
-      console.log("[Scan] No more new unread messages revealed, stopping.");
-      break;
-    }
-
-    prevBubbleCount = unreadBubbles.length;
-
-    // Scroll just slightly past the last visible bubble
-    unreadBubbles.at(-1)?.scrollIntoView({ behavior: "auto", block: "end" });
-    await new Promise((res) => setTimeout(res, 800));
-  }
+  })().finally(() => {
+    scanUnreadMsgsInProgress = false;
+    console.log("[Scan] Done Scanning");
+  });
 }
 
 setInterval(async () => {
-  if (await isForwardInProgress()) {
-    console.log("Forard in progress,early return");
+  if (isBusy()) {
+    console.log("[Monitor] Action in progress, Skipping...");
     return;
   }
 
-  if (document.querySelector(".bubbles-group")) {
+  if (await isForwardInProgress()) {
+    console.log("Forward in progress,early return");
+    return;
+  }
+
+  if (getBubblesGroup()) {
     console.log("[Monitor] Chat loaded, Clearing interval...");
     const isChatWatched = await isWatchedChat();
     if (!isChatWatched) {
@@ -231,7 +262,7 @@ setInterval(async () => {
   } else {
     console.log("[Monitor] Chat not loaded yet, retrying...");
   }
-}, 25000);
+}, 25_000);
 
 function processMessageData(msg: MessageData) {
   console.log("[Monitor] Process Message Data Called:", msg.mid);
@@ -280,22 +311,26 @@ async function openChatByTitle(title: string): Promise<boolean> {
     const unreadBadge = item.querySelector(".dialog-subtitle-badge-unread");
 
     if (label === title) {
-      if (unreadBadge) {
-        simulateClick(item);
-
-        for (let i = 0; i < 20; i++) {
-          await new Promise((r) => setTimeout(r, 300));
-          const current = getCurrentChatTitle();
-
-          if (current === title) {
-            console.log("[Chat Opened] Current chat title:", current);
-            return true;
-          }
-        }
+      if (!unreadBadge) {
+        console.log(`[Chat Found] Chat "${title}" has no unread messages.`);
+        return false;
       }
 
-      console.log(`[Chat Found] Chat "${title}" has no unread messages.`);
-      return false;
+      simulateClick(item);
+
+      const chatOpened = await waitFor({
+        maxWaitMs: 15_000,
+        eachWaitMs: 300,
+        condition: async () => {
+          const current = getCurrentChatTitle();
+          return current === title && !!getBubblesGroup();
+        },
+      });
+
+      if (chatOpened) {
+        console.log("[Chat Opened] Current chat title:", title);
+        return true;
+      }
     }
   }
 
@@ -321,35 +356,74 @@ async function isForwardInProgress(): Promise<boolean> {
   }
 }
 
-async function scanAllWatchedChatsWithUnread() {
+async function waitFor({
+  eachWaitMs = 2_000,
+  maxWaitMs = 45_000,
+  logIdentifier = "",
+  condition,
+}: {
+  maxWaitMs?: number;
+  eachWaitMs?: number;
+  logIdentifier?: string;
+  condition: () => Promise<boolean>;
+}) {
   // Wait if a forward is in progress (but no longer than 20 seconds total)
   let waited = 0;
-  const maxWait = 30000; // 20 seconds
 
-  while ((await isForwardInProgress()) && waited < maxWait) {
-    console.log("[Chat Scanner] Forward in progress. Waiting...");
-    await new Promise((res) => setTimeout(res, 1000));
-    waited += 2000;
+  while ((await condition()) && waited < maxWaitMs) {
+    console.log(`${logIdentifier} [Wait For] Forward in progress. Waiting...`);
+    await sleep(eachWaitMs); // sleep for 2 second
+    waited += eachWaitMs;
   }
 
-  if (waited >= maxWait) {
-    console.warn("[Chat Scanner] Waited 20 seconds, continuing anyway...");
+  if (waited >= maxWaitMs) {
+    console.warn(
+      `${logIdentifier} [Wait For] Waited ${maxWaitMs/1000} seconds, Done waiting...`
+    );
+    return false;
   }
 
-  await loadSettings();
-  const watchedChats = await getWatchedChats();
+  console.log(`${logIdentifier} [Wait For] Condition Met`);
+  return true;
+}
 
-  for (const _ in watchedChats) {
-    const nextChat = getNextChat(watchedChats);
-    const title = nextChat.trim();
-    const opened = await openChatByTitle(title);
-    if (opened) {
-      await scanUnreadMessages();
-      break; // Exit after processing the first chat with unread messages
+async function scanAllWatchedChatsWithUnread() {
+  (async () => {
+    console.log("[Chat Scanner] Started");
+
+    if (isBusy()) {
+      console.log("[Chat Scanner] A scan is already in progress... Exiting");
+
+      return;
     }
-  }
 
-  setTimeout(scanAllWatchedChatsWithUnread, 15000);
+    scanUnreadChatsInProgress = true;
+    console.log("[Chat Scanner] No Scan in progress. Beginning New Scan");
+
+    // Wait if a forward is in progress (but no longer than 45 seconds total)
+    waitFor({
+      condition: isForwardInProgress,
+      maxWaitMs: 45_000,
+      logIdentifier: "[Chat Scanner]",
+    });
+
+    await loadSettings();
+    const watchedChats = await getWatchedChats();
+
+    for (const _ in watchedChats) {
+      const nextChat = getNextChat(watchedChats);
+      const title = nextChat.trim();
+      const opened = await openChatByTitle(title);
+      if (opened) {
+        await scanUnreadMessages();
+        break; // Exit after processing the first chat with unread messages
+      }
+    }
+
+    scanUnreadChatsInProgress = false;
+
+    console.log("[Chat Scanner]: Scan ended");
+  })().finally(() => setTimeout(scanAllWatchedChatsWithUnread, 15000));
 }
 
 async function sendToForwardTarget({
@@ -436,6 +510,7 @@ async function sendToForwardTarget({
   const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
 
   input.focus();
+
   const pasteEvent = new ClipboardEvent("paste", {
     bubbles: true,
     cancelable: true,
@@ -449,7 +524,7 @@ async function sendToForwardTarget({
     sendButton.click();
   }
 
-  await new Promise((res) => setTimeout(res, 1000));
+  await sleep(1000);
   console.log("CA sent successfully to target chat.");
 
   console.log(

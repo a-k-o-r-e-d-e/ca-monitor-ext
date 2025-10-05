@@ -1,6 +1,7 @@
 // contentScript.ts
 
 import { formatDistanceToNow, formatISO } from "date-fns";
+import { ForwardRequest, MessageData, RuntimeSettings } from "./types";
 
 const trojanBotChat: string = "Trojan on Solana - Odysseus";
 const extTestReceiverChat = "Ext Test R";
@@ -8,50 +9,10 @@ const BUBBLES_GROUP_IDENTIFIER = ".bubbles-group";
 
 let scanUnreadChatsInProgress = false;
 let scanUnreadMsgsInProgress = false;
+let IS_PROCESSING_QUEUE = false;
+let FORWARD_IN_PROGRESS = false;
 
-chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
-  console.log("[listener] Message received:", message.type);
-  if (message.type === "FORWARD_CA") {
-    const { ca, ticker, chatTitle } = message.data;
-    await sendToForwardTarget({
-      ca,
-      ticker,
-      sourceChat: chatTitle,
-      destChat: trojanBotChat,
-    });
-
-    // await sendToForwardTarget({
-    //   ca,
-    //   ticker,
-    //   sourceChat: chatTitle,
-    //   destChat: extTestReceiverChat,
-    // });
-
-    sendResponse({ done: true });
-  }
-});
-
-window.addEventListener("message", (event) => {
-  if (event.source !== window) return;
-  if (event.data?.type === "START_SCAN") {
-    console.log(
-      `[Content Script] START_SCAN received at ${new Date().toISOString()}`
-    );
-    scanAllWatchedChatsWithUnread();
-  }
-});
-
-interface MessageData {
-  mid: string;
-  timestamp: string;
-  text: string;
-  chatTitle: string;
-}
-
-interface RuntimeSettings {
-  watchedChats: string[];
-  maxMessageAge: number; // in seconds
-}
+const CA_QUEUE: ForwardRequest[] = [];
 
 let runtimeSettings: RuntimeSettings | null = {
   watchedChats: [] as string[],
@@ -60,6 +21,61 @@ let runtimeSettings: RuntimeSettings | null = {
 
 const seenMessageIds = new Set<string>();
 let chatLoopIndex = 0;
+
+// chrome.runtime.onMessage.addListener(async (message, _, sendResponse) => {
+//   console.log("[listener] Message received:`, message.type);
+//   if (message.type === "FORWARD_CA") {
+//     const { ca, ticker, chatTitle } = message.data;
+//     await sendToForwardTarget({
+//       ca,
+//       ticker,
+//       sourceChat: chatTitle,
+//       destChat: trojanBotChat,
+//     });
+
+//     // await sendToForwardTarget({
+//     //   ca,
+//     //   ticker,
+//     //   sourceChat: chatTitle,
+//     //   destChat: extTestReceiverChat,
+//     // });
+
+//     sendResponse({ done: true });
+//   }
+// });
+
+const isBusy = () => {
+  if (scanUnreadChatsInProgress) {
+    console.log(`[IS BUSY] Scan unread chats in progress`);
+  }
+
+  if (scanUnreadMsgsInProgress) {
+    console.log(`[IS BUSY] Scan Unread Msgs in Progress`);
+  }
+
+  if (IS_PROCESSING_QUEUE) {
+    console.log(`[IS BUSY] Processing Queue`);
+  }
+
+  if (FORWARD_IN_PROGRESS) {
+    console.log(`[IS_BUSY] Forwarding in Progress`);
+  }
+
+  // console.log("[IS_BUSY] ", {
+  //   scanUnreadChatsInProgress,
+  //   scanUnreadMsgsInProgress,
+  //   IS_PROCESSING_QUEUE,
+  //   FORWARD_IN_PROGRESS
+  // })
+
+  return (
+    scanUnreadChatsInProgress ||
+    scanUnreadMsgsInProgress ||
+    IS_PROCESSING_QUEUE ||
+    FORWARD_IN_PROGRESS
+  );
+};
+const getBubblesGroup = () => document.querySelector(BUBBLES_GROUP_IDENTIFIER);
 
 async function loadSettings(): Promise<RuntimeSettings> {
   return new Promise((resolve) => {
@@ -101,9 +117,6 @@ async function getWatchedChats(): Promise<string[]> {
   });
 }
 
-const isBusy = () => scanUnreadChatsInProgress || scanUnreadMsgsInProgress;
-const getBubblesGroup = () => document.querySelector(BUBBLES_GROUP_IDENTIFIER);
-
 function getCurrentChatTitle(): string | null {
   const titleEl = document.querySelector(
     '[class*="chat-info"] [class*="title"]'
@@ -135,7 +148,7 @@ function extractMessageData(el: Element): MessageData | null {
 }
 
 async function processMessageBubble(el: Element) {
-  console.log("[Processing Message Bubble]");
+  console.log(`[Processing Message Bubble]`);
   // const isChatWatched = await isWatchedChat();
   // if (!isChatWatched) {
   //   console.log("[Process Message Bubble] Not in watched chat, skipping...");
@@ -143,7 +156,7 @@ async function processMessageBubble(el: Element) {
   // }
   const data = extractMessageData(el);
   if (!data) {
-    console.log("[Message: invalid data]", data);
+    console.log(`[Message: invalid data]`, data);
     return;
   }
 
@@ -159,7 +172,6 @@ async function processMessageBubble(el: Element) {
   const datetime = formatISO(timestampSeconds * 1000);
 
   if (ageInSeconds > maxAge) {
-
     // console.log(
     //   `[Message too old]. Datetime: ${datetime} --- Age: ${duration} \n\n Data: ${JSON.stringify(
     //     data
@@ -173,25 +185,94 @@ async function processMessageBubble(el: Element) {
   }
 
   // seenMessageIds.add(data.mid);
-  console.log(`[New Message]. Datetime: ${datetime} --- Age: ${duration}`)
+  console.log(`[New Message]. Datetime: ${datetime} --- Age: ${duration}`);
   processMessageData(data);
 }
 
-async function scanUnreadMessages() {
+const processQueuedCA = async (caMsg: ForwardRequest) => {
+  const { ca, ticker, chatTitle, timestamp } = caMsg;
+  console.log(
+    `[Process CA] Processing queued CA-- Source: `,
+    chatTitle,
+    " CA:",
+    ca,
+    "ticker:",
+    ticker
+  );
+
+  // ⏱️ Ignore messages older than 10 minutes
+  const timestampSeconds = parseInt(timestamp, 10);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const ageInSeconds = nowSeconds - timestampSeconds;
+
+  const maxAge = 1800; // 1800 seconds = 30 minutes
+
+  if (ageInSeconds > maxAge) {
+    const duration = formatDistanceToNow(timestampSeconds * 1000, {
+      addSuffix: true,
+    });
+    const datetime = formatISO(timestampSeconds * 1000);
+
+    console.log(
+      `[CA Message too old]. Source: ${chatTitle} --- Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
+    );
+    return;
+  }
+
+  await sendToForwardTarget({
+    ca,
+    ticker,
+    sourceChat: chatTitle,
+    destChat: trojanBotChat,
+  });
+
+  // await sendToForwardTarget({
+  //   ca,
+  //   ticker,
+  //   sourceChat: chatTitle,
+  //   destChat: extTestReceiverChat,
+  // });
+};
+
+const processCAQueue = async (chatTitle: string) => {
+  if (CA_QUEUE.length < 1) {
+    console.log(`[Process QUEUE]: Queue Empty.... Exiting`);
+    return;
+  }
+
+  IS_PROCESSING_QUEUE = true;
+  try {
+    while (CA_QUEUE.length > 0) {
+      const request = CA_QUEUE[0];
+      console.log(`[Queue] [${chatTitle}] Processing request:`, request);
+
+      await processQueuedCA(request);
+
+      console.log(`[Queue] Request processed, removing from queue...`);
+      CA_QUEUE.shift(); // Remove after processing
+    }
+  } catch (error) {
+    console.error(`[Queue] Error processing request:`, error);
+  } finally {
+    IS_PROCESSING_QUEUE = false;
+  }
+};
+
+async function scanUnreadMessages(chatTitle: string) {
   // const isChatWatched = await isWatchedChat();
   // if (!isChatWatched) {
-  //   console.log("[Scan Unread messages] Not in watched chat, skipping...");
+  //   console.log(`[Scan Unread messages] Not in watched chat, skipping...`);
   //   return;
   // }
 
   scanUnreadMsgsInProgress = true;
 
-  (async () => {
-    if (!getBubblesGroup()) {
-      scanUnreadMsgsInProgress = false;
-      console.log("[Scan] No Bubbles Group Found... Exiting");
-      return;
-    }
+  try {
+    // if (!getBubblesGroup()) {
+    //   scanUnreadMsgsInProgress = false;
+    //   console.log(`[Msgs Scanner] No Bubbles Group Found... Exiting`);
+    //   return;
+    // }
 
     let prevBubbleCount = 0;
 
@@ -199,19 +280,24 @@ async function scanUnreadMessages() {
     while (true) {
       const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
       if (!firstUnreadEl) {
-        console.log("[Scan] No unread marker found. Exiting scan.");
+        console.log(`[Msgs Scanner] [${chatTitle}] No unread marker found. Exiting scan.`);
         break;
       }
 
       firstUnreadEl.scrollIntoView({ behavior: "auto", block: "center" });
-      await sleep(300); // 300 milliseconds
+      await sleep(500); // 500 milliseconds
 
       const bubbles = Array.from(document.querySelectorAll(".bubble"));
-      console.log("[Scan] Found bubbles:", bubbles.length);
+      console.log(
+        `[Msgs Scanner] [${chatTitle}] Found bubbles:`,
+        bubbles.length
+      );
       const firstUnreadIndex = bubbles.indexOf(firstUnreadEl as Element);
 
       if (firstUnreadIndex === -1) {
-        console.log("[Scan] Index of unread marker not found. Exiting scan.");
+        console.log(
+          `[Msgs Scanner] [${chatTitle}] Index of unread marker not found. Exiting scan.`
+        );
         return;
       }
 
@@ -223,49 +309,58 @@ async function scanUnreadMessages() {
       }
 
       if (unreadBubbles.length === prevBubbleCount) {
-        console.log("[Scan] No more new unread messages revealed, stopping.");
+        console.log(
+          `[Msgs Scanner] [${chatTitle}] No more new unread messages revealed, stopping.`
+        );
         break;
       }
 
       prevBubbleCount = unreadBubbles.length;
-
+      console.log(
+        `[Msg Scanner] [${chatTitle}] Scroll to the end of unread bubbles`
+      );
       // Scroll just slightly past the last visible bubble
       unreadBubbles.at(-1)?.scrollIntoView({ behavior: "auto", block: "end" });
-      await sleep(800); // sleep for 800 milliseconds
+      await sleep(1000); // sleep for 800 milliseconds
     }
-  })().finally(() => {
+  } finally {
     scanUnreadMsgsInProgress = false;
-    console.log("[Scan] Done Scanning");
-  });
+    console.log(`[Msgs Scanner] [${chatTitle}] Done Scanning`);
+  }
 }
 
-setInterval(async () => {
-  if (isBusy()) {
-    console.log("[Monitor] Action in progress, Skipping...");
-    return;
-  }
+const processOpenedChat = async (chatTitle: string) => {
+  await scanUnreadMessages(chatTitle);
+  await processCAQueue(chatTitle);
+};
 
-  if (await isForwardInProgress()) {
-    console.log("Forward in progress,early return");
-    return;
-  }
+// setInterval(async () => {
+//   if (isBusy()) {
+//     console.log(`[Monitor] Action in progress, Skipping...`);
+//     return;
+//   }
 
-  if (getBubblesGroup()) {
-    console.log("[Monitor] Chat loaded, Clearing interval...");
-    const isChatWatched = await isWatchedChat();
-    if (!isChatWatched) {
-      console.log("[Poll Recent Messages] Not in watched chat, skipping...");
-      return;
-    }
-    const bubbles = Array.from(document.querySelectorAll(".bubble"));
-    bubbles.forEach((el) => processMessageBubble(el));
-  } else {
-    console.log("[Monitor] Chat not loaded yet, retrying...");
-  }
-}, 25_000);
+//   if (await isForwardInProgress()) {
+//     console.log(`Forward in progress,early return`);
+//     return;
+//   }
+
+//   if (getBubblesGroup()) {
+//     console.log(`[Monitor] Chat loaded, Clearing interval...`);
+//     const isChatWatched = await isWatchedChat();
+//     if (!isChatWatched) {
+//       console.log(`[Poll Recent Messages] Not in watched chat, skipping...`);
+//       return;
+//     }
+//     const bubbles = Array.from(document.querySelectorAll(".bubble"));
+//     bubbles.forEach((el) => processMessageBubble(el));
+//   } else {
+//     console.log(`[Monitor] Chat not loaded yet, retrying...`);
+//   }
+// }, 25_000);
 
 function processMessageData(msg: MessageData) {
-  console.log("[Monitor] Process Message Data Called:", msg.mid);
+  console.log(`[Monitor] Process Message Data Called:`, msg.mid);
   const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
   const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
 
@@ -278,15 +373,19 @@ function processMessageData(msg: MessageData) {
 
     console.log(`[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`);
 
-    chrome.runtime.sendMessage({
-      type: "QUEUE_CA",
-      data: {
-        ca: firstCA,
-        ticker: firstTicker,
-        chatTitle: msg.chatTitle,
-        timestamp: msg.timestamp,
-      },
-    });
+    const caData = {
+      ca: firstCA,
+      ticker: firstTicker,
+      chatTitle: msg.chatTitle,
+      timestamp: msg.timestamp,
+    };
+
+    // chrome.runtime.sendMessage({
+    //   type: "QUEUE_CA",
+    //   data: caData,
+    // });
+
+    CA_QUEUE.push(caData);
   }
 }
 
@@ -303,7 +402,7 @@ async function openChatByTitle(title: string): Promise<boolean> {
 
   // console.log("Sidebar items:", sidebarItems);
 
-  console.log("Expected Chat Title:", title);
+  console.log(`Expected Chat Title:`, title);
   for (const item of sidebarItems) {
     const label = item
       .querySelector(".user-title .peer-title")
@@ -321,6 +420,7 @@ async function openChatByTitle(title: string): Promise<boolean> {
       const chatOpened = await waitFor({
         maxWaitMs: 15_000,
         eachWaitMs: 300,
+        logIdentifier: "[Open Chat]",
         condition: async () => {
           const current = getCurrentChatTitle();
           return current === title && !!getBubblesGroup();
@@ -328,7 +428,7 @@ async function openChatByTitle(title: string): Promise<boolean> {
       });
 
       if (chatOpened) {
-        console.log("[Chat Opened] Current chat title:", title);
+        console.log(`[Chat Opened] Current chat title:`, title);
         return true;
       }
     }
@@ -378,7 +478,9 @@ async function waitFor({
 
   if (waited >= maxWaitMs) {
     console.warn(
-      `${logIdentifier} [Wait For] Waited ${maxWaitMs/1000} seconds, Done waiting...`
+      `${logIdentifier} [Wait For] Waited ${
+        maxWaitMs / 1000
+      } seconds, Done waiting...`
     );
     return false;
   }
@@ -389,23 +491,23 @@ async function waitFor({
 
 async function scanAllWatchedChatsWithUnread() {
   (async () => {
-    console.log("[Chat Scanner] Started");
+    console.log(`[Chat Scanner] Started`);
 
     if (isBusy()) {
-      console.log("[Chat Scanner] A scan is already in progress... Exiting");
+      console.log(`[Chat Scanner] A scan is already in progress... Exiting`);
 
       return;
     }
 
     scanUnreadChatsInProgress = true;
-    console.log("[Chat Scanner] No Scan in progress. Beginning New Scan");
+    console.log(`[Chat Scanner] No Scan in progress. Beginning New Scan`);
 
     // Wait if a forward is in progress (but no longer than 45 seconds total)
-    waitFor({
-      condition: isForwardInProgress,
-      maxWaitMs: 45_000,
-      logIdentifier: "[Chat Scanner]",
-    });
+    // waitFor({
+    //   condition: isForwardInProgress,
+    //   maxWaitMs: 45_000,
+    //   logIdentifier: "[Chat Scanner]",
+    // });
 
     await loadSettings();
     const watchedChats = await getWatchedChats();
@@ -415,15 +517,15 @@ async function scanAllWatchedChatsWithUnread() {
       const title = nextChat.trim();
       const opened = await openChatByTitle(title);
       if (opened) {
-        await scanUnreadMessages();
+        await processOpenedChat(title);
         break; // Exit after processing the first chat with unread messages
       }
     }
 
     scanUnreadChatsInProgress = false;
 
-    console.log("[Chat Scanner]: Scan ended");
-  })().finally(() => setTimeout(scanAllWatchedChatsWithUnread, 15000));
+    console.log(`[Chat Scanner]: Scan ended`);
+  })().finally(() => setTimeout(scanAllWatchedChatsWithUnread, 15_000));
 }
 
 async function sendToForwardTarget({
@@ -437,9 +539,6 @@ async function sendToForwardTarget({
   ticker: string;
   sourceChat: string;
 }) {
-  // await updateForwardInProgress(true);
-  console.log("[Send to Forward Target] Called...");
-  console.log("[Send to Forward Target] Another Call Called...");
   function getCurrentChatTitle(): string | null {
     const titleEl = document.querySelector(
       '[class*="chat-info"] [class*="title"]'
@@ -463,96 +562,108 @@ async function sendToForwardTarget({
     return false;
   }
 
-  console.log("Before get current chat");
+  FORWARD_IN_PROGRESS = true;
 
-  const originalChatTitle = sourceChat ?? getCurrentChatTitle();
-  console.log("After Get Current Chat");
-  const targetChatName: string = destChat;
+  try {
+    // await updateForwardInProgress(true);
+    console.log(`[Send to Forward Target] Called...`);
 
-  console.log(
-    `Source chat: ${originalChatTitle} -- Dest Chat: ${targetChatName}  -- Timestamp: ${new Date().toISOString()}`
-  );
+    console.log("Before get current chat");
 
-  // Step 1: Navigate to target chat
-  const chatListContainer = document.querySelector(".chatlist");
-  const chatList = chatListContainer?.querySelectorAll("a.chatlist-chat") || [];
-
-  const targetChat = Array.from(chatList).find((el) => {
-    const titleEl = el.querySelector(".user-title");
-    return titleEl?.textContent?.trim().includes(targetChatName);
-  });
-
-  if (!targetChat) {
-    const errMsg = `Target chat [${targetChatName}] not found -- Timestamp: ${new Date().toISOString()}`;
-    console.log(errMsg);
-    throw new Error(errMsg);
-  }
-
-  console.log(`Chat found -- Timestamp: ${new Date().toISOString()}`);
-
-  targetChat.scrollIntoView({ behavior: "auto", block: "center" });
-  targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  targetChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-  const loaded = await waitForTargetChatLoad(targetChatName);
-  if (!loaded) {
-    const errMsg = `Failed to load target chat [${targetChatName}] -- Timestamp: ${new Date().toISOString()}`;
-    console.log(errMsg);
-    throw new Error(errMsg);
-  }
-
-  // Step 2: Send the CA message
-  const input = document.querySelector(
-    '[contenteditable="true"]'
-  ) as HTMLElement;
-  if (!input) return;
-
-  const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
-
-  input.focus();
-
-  const pasteEvent = new ClipboardEvent("paste", {
-    bubbles: true,
-    cancelable: true,
-    clipboardData: new DataTransfer(),
-  });
-  pasteEvent.clipboardData?.setData("text/plain", messageText);
-  input.dispatchEvent(pasteEvent);
-
-  const sendButton = document.querySelector(".btn-send");
-  if (sendButton instanceof HTMLElement) {
-    sendButton.click();
-  }
-
-  await sleep(1000);
-  console.log("CA sent successfully to target chat.");
-
-  console.log(
-    "[xxxx] Attempting to navigate back to original chat...",
-    originalChatTitle
-  );
-
-  // Step 3: Navigate back to original chat
-  if (originalChatTitle) {
-    const originalChat = Array.from(chatList).find((el) => {
-      const titleEl = el.querySelector(".user-title");
-      return titleEl?.textContent?.trim() === originalChatTitle;
-    });
-
-    if (!originalChat) {
-      console.log(`Original chat [${originalChatTitle}] not found`);
-      return;
-    }
+    const originalChatTitle = sourceChat ?? getCurrentChatTitle();
+    console.log("After Get Current Chat");
+    const targetChatName: string = destChat;
 
     console.log(
-      "Simulating click to navigate back to original chat: ",
+      `Source chat: ${originalChatTitle} -- Dest Chat: ${targetChatName}  -- Timestamp: ${new Date().toISOString()}`
+    );
+
+    // Step 1: Navigate to target chat
+    const chatListContainer = document.querySelector(".chatlist");
+    const chatList =
+      chatListContainer?.querySelectorAll("a.chatlist-chat") || [];
+
+    const targetChat = Array.from(chatList).find((el) => {
+      const titleEl = el.querySelector(".user-title");
+      return titleEl?.textContent?.trim().includes(targetChatName);
+    });
+
+    if (!targetChat) {
+      const errMsg = `Target chat [${targetChatName}] not found -- Timestamp: ${new Date().toISOString()}`;
+      console.log(errMsg);
+      throw new Error(errMsg);
+    }
+
+    console.log(`Chat found -- Timestamp: ${new Date().toISOString()}`);
+
+    targetChat.scrollIntoView({ behavior: "auto", block: "center" });
+    targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    targetChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const loaded = await waitForTargetChatLoad(targetChatName);
+    if (!loaded) {
+      const errMsg = `Failed to load target chat [${targetChatName}] -- Timestamp: ${new Date().toISOString()}`;
+      console.log(errMsg);
+      throw new Error(errMsg);
+    }
+
+    // Step 2: Send the CA message
+    const input = document.querySelector(
+      '[contenteditable="true"]'
+    ) as HTMLElement;
+    if (!input) return;
+
+    const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
+
+    input.focus();
+
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: new DataTransfer(),
+    });
+    pasteEvent.clipboardData?.setData("text/plain", messageText);
+    input.dispatchEvent(pasteEvent);
+
+    const sendButton = document.querySelector(".btn-send");
+    if (sendButton instanceof HTMLElement) {
+      sendButton.click();
+    }
+
+    await sleep(1000);
+    console.log("CA sent successfully to target chat.");
+
+    console.log(
+      `[xxxx] Attempting to navigate back to original chat...`,
       originalChatTitle
     );
-    originalChat.scrollIntoView({ behavior: "auto", block: "center" });
-    originalChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    await waitForTargetChatLoad(originalChatTitle);
+    // Step 3: Navigate back to original chat
+    if (originalChatTitle) {
+      const originalChat = Array.from(chatList).find((el) => {
+        const titleEl = el.querySelector(".user-title");
+        return titleEl?.textContent?.trim() === originalChatTitle;
+      });
+
+      if (!originalChat) {
+        console.log(`Original chat [${originalChatTitle}] not found`);
+        return;
+      }
+
+      console.log(
+        "Simulating click to navigate back to original chat: ",
+        originalChatTitle
+      );
+      originalChat.scrollIntoView({ behavior: "auto", block: "center" });
+      originalChat.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true })
+      );
+      originalChat.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      await waitForTargetChatLoad(originalChatTitle);
+    }
+  } finally {
+    FORWARD_IN_PROGRESS = false;
   }
 }
 
@@ -560,9 +671,9 @@ async function sendToForwardTarget({
 const waitForSidebarLoad = setInterval(() => {
   if (document.querySelector(".chatlist .chatlist-chat")) {
     clearInterval(waitForSidebarLoad);
-    console.log("[Init] Sidebar detected. Starting scanner loop...");
+    console.log(`[Init] Sidebar detected. Starting scanner loop...`);
     scanAllWatchedChatsWithUnread();
   } else {
-    console.log("[Init] Waiting for sidebar...");
+    console.log(`[Init] Waiting for sidebar...`);
   }
 }, 500);

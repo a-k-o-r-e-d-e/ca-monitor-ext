@@ -7,6 +7,7 @@ import {
   isValid,
   parseISO,
 } from "date-fns";
+import { ForwardRequest, ProcessedCAsMap } from "./types";
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
@@ -47,19 +48,7 @@ chrome.runtime.onStartup.addListener(() => {
 //   }
 // });
 
-interface ForwardRequest {
-  ca: string;
-  chatTitle: string;
-  timestamp: string;
-  ticker: string;
-}
 
-interface ProcessedCAEntry {
-  ticker: string;
-  firstSeen: string; // when first detected
-  lastSeen: string; // when most recently seen
-}
-type ProcessedCAsMap = Record<string, ProcessedCAEntry>;
 
 const QUEUE_STORAGE_KEY = "forwardQueue";
 const PROCESSED_CAS_KEY = "processedCAs";

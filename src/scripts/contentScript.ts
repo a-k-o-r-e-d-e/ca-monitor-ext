@@ -426,7 +426,7 @@ async function openChatByTitle(title: string): Promise<boolean> {
       simulateClick(item);
 
       const chatOpened = await waitFor({
-        maxWaitMs: 15_000,
+        maxWaitMs: 45_000,
         eachWaitMs: 300,
         logIdentifier: "[Open Chat]",
         condition: async () => {
@@ -478,7 +478,7 @@ async function waitFor({
   // Wait if a forward is in progress (but no longer than 20 seconds total)
   let waited = 0;
 
-  while ((await condition()) && waited < maxWaitMs) {
+  while (!(await condition()) && waited < maxWaitMs) {
     console.log(`${logIdentifier} [Wait For] Forward in progress. Waiting...`);
     await sleep(eachWaitMs); // sleep for 2 second
     waited += eachWaitMs;

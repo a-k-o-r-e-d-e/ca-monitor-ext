@@ -184,7 +184,11 @@ async function processMessageBubble(el: Element) {
     return; // 600 seconds = 10 minutes
   }
 
-  // seenMessageIds.add(data.mid);
+  seenMessageIds.add(data.mid);
+  if (seenMessageIds.has(data.mid)) {
+    console.log(`[Process Msg Bubble] ${data.mid} already seen`);
+    return;
+  }
   console.log(`[New Message]. Datetime: ${datetime} --- Age: ${duration}`);
   processMessageData(data);
 }

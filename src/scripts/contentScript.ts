@@ -192,7 +192,7 @@ async function processMessageBubble(el: Element) {
 const processQueuedCA = async (caMsg: ForwardRequest) => {
   const { ca, ticker, chatTitle, timestamp } = caMsg;
   console.log(
-    `[Process CA] Processing queued CA-- Source: `,
+    `[Process CA] [${chatTitle}] Processing queued CA-- Source: `,
     chatTitle,
     " CA:",
     ca,
@@ -214,7 +214,7 @@ const processQueuedCA = async (caMsg: ForwardRequest) => {
     const datetime = formatISO(timestampSeconds * 1000);
 
     console.log(
-      `[CA Message too old]. Source: ${chatTitle} --- Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
+      `[Process CA] [${chatTitle}] [CA Message too old]. Source: ${chatTitle} --- Ticker : ${ticker} --- CA: ${ca} --- Datetime: ${datetime} --- Age: ${duration}`
     );
     return;
   }
@@ -236,7 +236,7 @@ const processQueuedCA = async (caMsg: ForwardRequest) => {
 
 const processCAQueue = async (chatTitle: string) => {
   if (CA_QUEUE.length < 1) {
-    console.log(`[Process QUEUE]: Queue Empty.... Exiting`);
+    console.log(`[Process QUEUE] [${chatTitle}] Queue Empty.... Exiting`);
     return;
   }
 
@@ -248,11 +248,13 @@ const processCAQueue = async (chatTitle: string) => {
 
       await processQueuedCA(request);
 
-      console.log(`[Queue] Request processed, removing from queue...`);
+      console.log(
+        `[Queue] [${chatTitle}] Request processed, removing from queue...`
+      );
       CA_QUEUE.shift(); // Remove after processing
     }
   } catch (error) {
-    console.error(`[Queue] Error processing request:`, error);
+    console.error(`[Queue] [${chatTitle}] Error processing request:`, error);
   } finally {
     IS_PROCESSING_QUEUE = false;
   }
@@ -280,7 +282,9 @@ async function scanUnreadMessages(chatTitle: string) {
     while (true) {
       const firstUnreadEl = document.querySelector(".bubble.is-first-unread");
       if (!firstUnreadEl) {
-        console.log(`[Msgs Scanner] [${chatTitle}] No unread marker found. Exiting scan.`);
+        console.log(
+          `[Msgs Scanner] [${chatTitle}] No unread marker found. Exiting scan.`
+        );
         break;
       }
 
@@ -566,12 +570,10 @@ async function sendToForwardTarget({
 
   try {
     // await updateForwardInProgress(true);
-    console.log(`[Send to Forward Target] Called...`);
-
-    console.log("Before get current chat");
+    console.log(`[Send to Forward Target] [${sourceChat}] Called...`);
 
     const originalChatTitle = sourceChat ?? getCurrentChatTitle();
-    console.log("After Get Current Chat");
+    console.log(`After Get Current Chat`);
     const targetChatName: string = destChat;
 
     console.log(
@@ -594,7 +596,9 @@ async function sendToForwardTarget({
       throw new Error(errMsg);
     }
 
-    console.log(`Chat found -- Timestamp: ${new Date().toISOString()}`);
+    console.log(
+      `[${sourceChat}] Chat found -- Timestamp: ${new Date().toISOString()}`
+    );
 
     targetChat.scrollIntoView({ behavior: "auto", block: "center" });
     targetChat.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));

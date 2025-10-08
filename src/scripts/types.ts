@@ -1,8 +1,14 @@
-export interface ForwardRequest {
+export enum SupportedChains {
+  BSC = "BSC",
+  SOL = "SOL",
+}
+
+export interface CaData {
   ca: string;
   chatTitle: string;
   timestamp: string;
   ticker: string;
+  chain: SupportedChains;
 }
 
 export interface ProcessedCAEntry {

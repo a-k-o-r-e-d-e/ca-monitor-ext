@@ -7,7 +7,7 @@ import {
   isValid,
   parseISO,
 } from "date-fns";
-import { ForwardRequest, ProcessedCAsMap } from "./types";
+import { CaData, ProcessedCAsMap } from "./types";
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Telegram CA Monitor installed");
@@ -48,14 +48,12 @@ chrome.runtime.onStartup.addListener(() => {
 //   }
 // });
 
-
-
 const QUEUE_STORAGE_KEY = "forwardQueue";
 const PROCESSED_CAS_KEY = "processedCAs";
 
 const MAX_PROCESSED_AGE = 3 * 24 * 60 * 60; // 3 days in seconds
 
-let forwardQueue: ForwardRequest[] = [];
+let forwardQueue: CaData[] = [];
 let processedCAsCache: ProcessedCAsMap = {};
 let isProcessingQueue = false;
 
@@ -218,7 +216,7 @@ async function processQueue() {
   await updateForwardInProgress(false);
 }
 
-async function processQueuedCA(caMsg: ForwardRequest) {
+async function processQueuedCA(caMsg: CaData) {
   const { ca, ticker, chatTitle, timestamp } = caMsg;
   console.log(
     "[Background] Processing queued CA-- Source: ",

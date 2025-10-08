@@ -1,10 +1,11 @@
 // contentScript.ts
 
 import { formatDistanceToNow, formatISO } from "date-fns";
-import { ForwardRequest, MessageData, RuntimeSettings } from "./types";
+import { CaData, MessageData, RuntimeSettings, SupportedChains } from "./types";
 
-const trojanBotChat: string = "Trojan on Solana - Odysseus";
-const extTestReceiverChat = "Ext Test R";
+const TROJAN_BOT_CHAT: string = "Trojan on Solana - Odysseus";
+const BSC_BOT_CHAT = 'Maestro'
+const EXT_TEST_RECEIVER_CHAT = "Ext Test R";
 const BUBBLES_GROUP_IDENTIFIER = ".bubbles-group";
 
 let scanUnreadChatsInProgress = false;
@@ -12,7 +13,7 @@ let scanUnreadMsgsInProgress = false;
 let IS_PROCESSING_QUEUE = false;
 let FORWARD_IN_PROGRESS = false;
 
-const CA_QUEUE: ForwardRequest[] = [];
+const CA_QUEUE: CaData[] = [];
 
 let runtimeSettings: RuntimeSettings | null = {
   watchedChats: [] as string[],
@@ -193,8 +194,8 @@ async function processMessageBubble(el: Element) {
   processMessageData(data);
 }
 
-const processQueuedCA = async (caMsg: ForwardRequest) => {
-  const { ca, ticker, chatTitle, timestamp } = caMsg;
+const processQueuedCA = async (caData: CaData) => {
+  const { ca, ticker, chatTitle, timestamp } = caData;
   console.log(
     `[Process CA] [${chatTitle}] Processing queued CA-- Source: `,
     chatTitle,
@@ -223,11 +224,23 @@ const processQueuedCA = async (caMsg: ForwardRequest) => {
     return;
   }
 
+  let destChat : string
+
+  switch(caData.chain) {
+    case SupportedChains.BSC:
+      destChat = BSC_BOT_CHAT
+      break
+    case SupportedChains.SOL:
+      destChat = TROJAN_BOT_CHAT
+      break;
+    default:
+      console.log("[Process CA] Error: Unrecognized chain. Skipping", caData);
+      return;
+  }
+
   await sendToForwardTarget({
-    ca,
-    ticker,
-    sourceChat: chatTitle,
-    destChat: trojanBotChat,
+    caData,
+    destChat,
   });
 
   // await sendToForwardTarget({
@@ -369,32 +382,53 @@ const processOpenedChat = async (chatTitle: string) => {
 
 function processMessageData(msg: MessageData) {
   console.log(`[Monitor] Process Message Data Called:`, msg.mid);
-  const CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
+  const BSC_CA_REGEX = /\b0x[a-fA-F0-9]{40}\b/;
+  const SOL_CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
   const TICKER_REGEX = /\$[A-Za-z][A-Za-z0-9]{0,19}\b/g;
 
-  const caMatches = msg.text.match(CA_REGEX);
+  const solCAMatches = msg.text.match(SOL_CA_REGEX);
+  const bscCAMatches = msg.text.match(BSC_CA_REGEX);
   const tickerMatches = msg.text.match(TICKER_REGEX);
 
-  if (caMatches) {
-    const firstCA = caMatches[0];
-    const firstTicker = tickerMatches?.[0] || "";
-
-    console.log(`[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`);
-
-    const caData = {
-      ca: firstCA,
-      ticker: firstTicker,
-      chatTitle: msg.chatTitle,
-      timestamp: msg.timestamp,
-    };
-
-    // chrome.runtime.sendMessage({
-    //   type: "QUEUE_CA",
-    //   data: caData,
-    // });
-
-    CA_QUEUE.push(caData);
+  if (!solCAMatches && !bscCAMatches) {
+    console.log(`[Message Processor]: No CA found. Skipping msg`);
+    return;
   }
+
+  let chain: SupportedChains | null = null;
+  let firstCA: string | null = null;
+
+  if (solCAMatches) {
+    chain = SupportedChains.SOL;
+    firstCA = solCAMatches[0];
+  } else if (bscCAMatches) {
+    chain = SupportedChains.BSC;
+    firstCA = bscCAMatches[0];
+  }
+
+  if (!chain || !firstCA) {
+    console.log(`[Message Processor]: Error No chain recognized. Skipping msg`);
+    return;
+  }
+
+  const firstTicker = tickerMatches?.[0] || "";
+
+  console.log(`[Monitor] Queueing: CA = ${firstCA}, Ticker = ${firstTicker}`);
+
+  const caData: CaData = {
+    chain,
+    ca: firstCA,
+    ticker: firstTicker,
+    chatTitle: msg.chatTitle,
+    timestamp: msg.timestamp,
+  };
+
+  // chrome.runtime.sendMessage({
+  //   type: "QUEUE_CA",
+  //   data: caData,
+  // });
+
+  CA_QUEUE.push(caData);
 }
 
 function simulateClick(element: Element) {
@@ -538,14 +572,10 @@ async function scanAllWatchedChatsWithUnread() {
 
 async function sendToForwardTarget({
   destChat,
-  ca,
-  ticker,
-  sourceChat,
+  caData
 }: {
   destChat: string;
-  ca: string;
-  ticker: string;
-  sourceChat: string;
+  caData: CaData
 }) {
   function getCurrentChatTitle(): string | null {
     const titleEl = document.querySelector(
@@ -574,9 +604,9 @@ async function sendToForwardTarget({
 
   try {
     // await updateForwardInProgress(true);
-    console.log(`[Send to Forward Target] [${sourceChat}] Called...`);
+    console.log(`[Send to Forward Target] [${caData.chatTitle}] Called...`);
 
-    const originalChatTitle = sourceChat ?? getCurrentChatTitle();
+    const originalChatTitle = caData.chatTitle ?? getCurrentChatTitle();
     console.log(`After Get Current Chat`);
     const targetChatName: string = destChat;
 
@@ -601,7 +631,7 @@ async function sendToForwardTarget({
     }
 
     console.log(
-      `[${sourceChat}] Chat found -- Timestamp: ${new Date().toISOString()}`
+      `[${caData.chatTitle}] Chat found -- Timestamp: ${new Date().toISOString()}`
     );
 
     targetChat.scrollIntoView({ behavior: "auto", block: "center" });
@@ -621,7 +651,7 @@ async function sendToForwardTarget({
     ) as HTMLElement;
     if (!input) return;
 
-    const messageText = `Source: ${originalChatTitle} \n\nTicker: ${ticker} \n\nCA: ${ca} \n\n`;
+    const messageText = `Source: ${originalChatTitle} \n\nChain: ${caData.chain} \n\nTicker: ${caData.ticker} \n\nCA: ${caData.ca} \n\n`;
 
     input.focus();
 
